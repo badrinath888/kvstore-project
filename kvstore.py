@@ -8,6 +8,7 @@ UTF-8 safe version
 
 import os
 import struct
+import sys
 
 DATA_FILE = "data.db"
 
@@ -73,19 +74,31 @@ class KVStore:
                 return v
         return None
 
+def safe_input():
+    """Safely read a line from stdin and handle decode errors."""
+    try:
+        return input()
+    except UnicodeDecodeError:
+        return None
+    except EOFError:
+        return None
+
 def repl():
     """Read-Eval-Print Loop for command-line interface."""
     db = KVStore()
     while True:
-        try:
-            line = input()
-        except EOFError:
+        line = safe_input()
+        if line is None:
             break
         if not line.strip():
             continue
 
-        parts = line.strip().split(" ", 2)
-        cmd = parts[0].upper()
+        try:
+            parts = line.strip().split(" ", 2)
+            cmd = parts[0].upper()
+        except Exception:
+            print("ERR", flush=True)
+            continue
 
         if cmd == "SET" and len(parts) == 3:
             db.set(parts[1], parts[2])
