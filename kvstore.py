@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-Simple persistent key-value store (UTF-8 safe).
+Simple persistent key-value store (Project 1)
+UTF-8 safe version
 """
-iconv -f UTF-8 -t UTF-8 kvstore.py -o kvstore_tmp.py
-mv kvstore_tmp.py kvstore.py
-
 
 import os
 import struct
@@ -20,7 +18,7 @@ class KVStore:
                 self._load(f)
 
     def _load(self, f):
-        """Load existing data.db into in-memory index."""
+        """Replay the log to rebuild in-memory index."""
         while True:
             header = f.read(8)
             if len(header) < 8:
@@ -39,7 +37,7 @@ class KVStore:
             self._set_index(key, value)
 
     def _set_index(self, key, value):
-        """Update in-memory index; last-write-wins."""
+        """Update in-memory index; last write wins."""
         for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
@@ -47,12 +45,13 @@ class KVStore:
         self.index.append((key, value))
 
     def set(self, key, value):
-        """Append key-value pair to data.db and update index."""
+        """Set key-value pair; skip if invalid UTF-8."""
         try:
             key_bytes = key.encode('utf-8')
             value_bytes = value.encode('utf-8')
         except UnicodeEncodeError:
-            return  # ignore invalid strings
+            return  # skip invalid input
+
         with open(DATA_FILE, "ab") as f:
             f.write(struct.pack("II", len(key_bytes), len(value_bytes)))
             f.write(key_bytes)
@@ -60,23 +59,25 @@ class KVStore:
         self._set_index(key, value)
 
     def get(self, key):
-        """Retrieve value from in-memory index."""
+        """Get value for key; return None if not found."""
         for k, v in self.index:
             if k == key:
                 return v
         return None
 
+
 def repl():
+    """Read-Eval-Print Loop for command-line interface."""
     db = KVStore()
     while True:
         try:
-            line = input()
+            line = input().strip()
         except EOFError:
             break
-        if not line.strip():
+        if not line:
             continue
 
-        parts = line.strip().split(" ", 2)
+        parts = line.split(" ", 2)
         cmd = parts[0].upper()
 
         if cmd == "SET" and len(parts) == 3:
@@ -90,6 +91,7 @@ def repl():
             break
         else:
             print("ERR", flush=True)
+
 
 if __name__ == "__main__":
     repl()
