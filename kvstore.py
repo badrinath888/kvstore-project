@@ -25,17 +25,21 @@ class KVStore:
             header = f.read(8)
             if len(header) < 8:
                 break
-            klen, vlen = struct.unpack("II", header)
+            try:
+                klen, vlen = struct.unpack("II", header)
+            except struct.error:
+                break  # Corrupt header
             key_bytes = f.read(klen)
             value_bytes = f.read(vlen)
             if len(key_bytes) < klen or len(value_bytes) < vlen:
-                break
+                break  # Corrupt record
             try:
                 key = key_bytes.decode('utf-8')
                 value = value_bytes.decode('utf-8')
             except UnicodeDecodeError:
-                # Skip invalid UTF-8 entries
-                continue
+                continue  # skip invalid UTF-8
+            if not key or not value:
+                continue  # skip empty key/value
             self._set_index(key, value)
 
     def _set_index(self, key, value):
@@ -47,7 +51,9 @@ class KVStore:
         self.index.append((key, value))
 
     def set(self, key, value):
-        """Set key-value pair; skip if invalid UTF-8."""
+        """Set key-value pair; skip if invalid UTF-8 or empty."""
+        if not key or not value:
+            return  # Disallow empty key/value
         try:
             key_bytes = key.encode('utf-8')
             value_bytes = value.encode('utf-8')
