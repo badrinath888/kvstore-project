@@ -16,8 +16,13 @@ class KVStore:
             if not header:
                 break
             klen, vlen = struct.unpack("II", header)
-            key = f.read(klen).decode('utf-8')
-            value = f.read(vlen).decode('utf-8')
+            key_bytes = f.read(klen)
+            value_bytes = f.read(vlen)
+            try:
+                key = key_bytes.decode("utf-8")
+                value = value_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                continue  # skip invalid UTF-8 entries
             self._set_index(key, value)
 
     def _set_index(self, key, value):
@@ -28,8 +33,8 @@ class KVStore:
         self.index.append((key, value))
 
     def set(self, key, value):
-        key_bytes = key.encode('utf-8')
-        value_bytes = value.encode('utf-8')
+        key_bytes = key.encode("utf-8")
+        value_bytes = value.encode("utf-8")
         with open(DATA_FILE, "ab") as f:
             f.write(struct.pack("II", len(key_bytes), len(value_bytes)))
             f.write(key_bytes)
