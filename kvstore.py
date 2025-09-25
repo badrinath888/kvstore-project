@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
 Simple persistent key-value store (Project 1)
 UTF-8 safe version
