@@ -65,19 +65,18 @@ class KVStore:
                 return v
         return None
 
-
 def repl():
     """Read-Eval-Print Loop for command-line interface."""
     db = KVStore()
     while True:
         try:
-            line = input().strip()
+            line = input()
         except EOFError:
             break
-        if not line:
+        if not line.strip():
             continue
 
-        parts = line.split(" ", 2)
+        parts = line.strip().split(" ", 2)
         cmd = parts[0].upper()
 
         if cmd == "SET" and len(parts) == 3:
@@ -91,7 +90,6 @@ def repl():
             break
         else:
             print("ERR", flush=True)
-
 
 if __name__ == "__main__":
     repl()
