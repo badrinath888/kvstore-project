@@ -1,9 +1,4 @@
-#!/usr/bin/env python3
-"""
-Simple persistent key-value store (Project 1).
-"""
-
-import os, sys, struct
+import os, struct
 
 DATA_FILE = "data.db"
 
@@ -20,8 +15,11 @@ class KVStore:
             if not header:
                 break
             klen, vlen = struct.unpack("II", header)
-            key = f.read(klen).decode("utf-8")
-            value = f.read(vlen).decode("utf-8")
+            key_bytes = f.read(klen)
+            value_bytes = f.read(vlen)
+            # Decode as UTF-8
+            key = key_bytes.decode("utf-8")
+            value = value_bytes.decode("utf-8")
             self._set_index(key, value)
 
     def _set_index(self, key, value):
@@ -32,6 +30,7 @@ class KVStore:
         self.index.append((key, value))
 
     def set(self, key, value):
+        # Always encode as UTF-8 when writing
         key_bytes = key.encode("utf-8")
         value_bytes = value.encode("utf-8")
         with open(DATA_FILE, "ab") as f:
@@ -45,7 +44,6 @@ class KVStore:
             if k == key:
                 return v
         return None
-
 def repl():
     db = KVStore()
     while True:
@@ -53,13 +51,10 @@ def repl():
             line = input().strip()
         except EOFError:
             break
-
         if not line:
             continue
-
         parts = line.split(" ", 2)
         cmd = parts[0].upper()
-
         if cmd == "SET" and len(parts) == 3:
             db.set(parts[1], parts[2])
             print("OK")
@@ -74,5 +69,4 @@ def repl():
 
 if __name__ == "__main__":
     repl()
-
 
