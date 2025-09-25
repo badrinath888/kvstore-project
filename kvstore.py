@@ -47,31 +47,27 @@ class KVStore:
 
     def get(self, key):
         return self.index.get(key, None)
-
 def repl():
     db = KVStore()
     while True:
         try:
-            line = input().strip()
+            line = input()
         except EOFError:
             break
 
-        if not line:
+        if not line.strip():
             continue
-        parts = line.split(" ", 2)
+        parts = line.strip().split(" ", 2)
         cmd = parts[0].upper()
 
         if cmd == "SET" and len(parts) == 3:
-            db.set(parts[1].strip(), parts[2].strip())
-            print("OK")
+            db.set(parts[1], parts[2])
+            print("OK", flush=True)
         elif cmd == "GET" and len(parts) == 2:
-            val = db.get(parts[1].strip())
-            print(val if val is not None else "NULL")
+            val = db.get(parts[1])
+            print(val if val is not None else "NULL", flush=True)
         elif cmd == "EXIT":
-            print("BYE")
+            print("BYE", flush=True)
             break
         else:
-            print("ERR")
-
-if __name__ == "__main__":
-    repl()
+            print("ERR", flush=True)
