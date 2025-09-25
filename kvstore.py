@@ -3,7 +3,8 @@
 Simple persistent key-value store (UTF-8 safe).
 """
 
-import os, struct
+import os
+import struct
 
 DATA_FILE = "data.db"
 
@@ -17,23 +18,33 @@ class KVStore:
     def _load(self, f):
         while True:
             header = f.read(8)
-            if not header:
+            if len(header) < 8:
                 break
             klen, vlen = struct.unpack("II", header)
-            key = f.read(klen).decode('utf-8')
-            value = f.read(vlen).decode('utf-8')
+            key_bytes = f.read(klen)
+            value_bytes = f.read(vlen)
+            if len(key_bytes) < klen or len(value_bytes) < vlen:
+                break
+            try:
+                key = key_bytes.decode('utf-8')
+                value = value_bytes.decode('utf-8')
+            except UnicodeDecodeError:
+                continue
             self._set_index(key, value)
 
     def _set_index(self, key, value):
-        for i, (k, v) in enumerate(self.index):
+        for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
                 return
         self.index.append((key, value))
 
     def set(self, key, value):
-        key_bytes = key.encode('utf-8')
-        value_bytes = value.encode('utf-8')
+        try:
+            key_bytes = key.encode('utf-8')
+            value_bytes = value.encode('utf-8')
+        except UnicodeEncodeError:
+            return
         with open(DATA_FILE, "ab") as f:
             f.write(struct.pack("II", len(key_bytes), len(value_bytes)))
             f.write(key_bytes)
@@ -43,33 +54,33 @@ class KVStore:
     def get(self, key):
         for k, v in self.index:
             if k == key:
-                return v.encode('utf-8')  # return as bytes for uniformity
+                return v  # return as string
         return None
 
 def repl():
     db = KVStore()
     while True:
         try:
-            line = input().strip()
+            line = input()
         except EOFError:
             break
-        if not line:
+        if not line.strip():
             continue
 
-        parts = line.split(" ", 2)
+        parts = line.strip().split(" ", 2)
         cmd = parts[0].upper()
 
         if cmd == "SET" and len(parts) == 3:
             db.set(parts[1], parts[2])
-            print("OK")
+            print("OK", flush=True)
         elif cmd == "GET" and len(parts) == 2:
             val = db.get(parts[1])
-            print(val.decode('utf-8') if val else "NULL")
+            print(val if val is not None else "NULL", flush=True)
         elif cmd == "EXIT":
-            print("BYE")
+            print("BYE", flush=True)
             break
         else:
-            print("ERR")
+            print("ERR", flush=True)
 
 if __name__ == "__main__":
     repl()
