@@ -2,6 +2,9 @@
 """
 Simple persistent key-value store (UTF-8 safe).
 """
+iconv -f UTF-8 -t UTF-8 kvstore.py -o kvstore_tmp.py
+mv kvstore_tmp.py kvstore.py
+
 
 import os
 import struct
