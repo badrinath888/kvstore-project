@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Simple persistent key-value store (Project 1)
-Handles UTF-8 encoding/decoding for Gradebot compliance
+Fully UTF-8 compliant for Gradebot
 """
 
 import os
@@ -74,10 +74,6 @@ def repl():
             break
         else:
             print("ERR")
-
-if __name__ == "__main__":
-    repl()
-
 
 if __name__ == "__main__":
     repl()
