@@ -19,25 +19,33 @@ class KVStore:
     def _load(self, f):
         while True:
             header = f.read(8)
-            if not header:
-                break
+            if len(header) < 8:
+                break  # incomplete header
             klen, vlen = struct.unpack("II", header)
             key_bytes = f.read(klen)
             value_bytes = f.read(vlen)
-            key = key_bytes.decode("utf-8")
-            value = value_bytes.decode("utf-8")
+            if len(key_bytes) < klen or len(value_bytes) < vlen:
+                break  # incomplete record
+            try:
+                key = key_bytes.decode("utf-8")
+                value = value_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                continue  # skip invalid entries
             self._set_index(key, value)
 
     def _set_index(self, key, value):
-        for i, (k, v) in enumerate(self.index):
+        for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
                 return
         self.index.append((key, value))
 
     def set(self, key, value):
-        key_bytes = key.encode("utf-8")
-        value_bytes = value.encode("utf-8")
+        try:
+            key_bytes = key.encode("utf-8")
+            value_bytes = value.encode("utf-8")
+        except UnicodeEncodeError:
+            return  # skip invalid UTF-8
         with open(DATA_FILE, "ab") as f:
             f.write(struct.pack("II", len(key_bytes), len(value_bytes)))
             f.write(key_bytes)
@@ -64,11 +72,11 @@ def repl():
         cmd = parts[0].upper()
 
         if cmd == "SET" and len(parts) == 3:
-            db.set(parts[1], parts[2])
+            db.set(parts[1].strip(), parts[2].strip())
             print("OK")
         elif cmd == "GET" and len(parts) == 2:
-            val = db.get(parts[1])
-            print(val if val else "NULL")
+            val = db.get(parts[1].strip())
+            print(val if val is not None else "NULL")
         elif cmd == "EXIT":
             print("BYE")
             break
