@@ -11,7 +11,7 @@ DATA_FILE = "data.db"
 
 class KVStore:
     def __init__(self):
-        self.index = []  # store keys/values as str
+        self.index = {}  # Use dict for fast lookup
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, "rb") as f:
                 self._load(f)
@@ -20,43 +20,33 @@ class KVStore:
         while True:
             header = f.read(8)
             if len(header) < 8:
-                break  # incomplete header
+                break
             klen, vlen = struct.unpack("II", header)
             key_bytes = f.read(klen)
             value_bytes = f.read(vlen)
             if len(key_bytes) < klen or len(value_bytes) < vlen:
-                break  # incomplete record
+                break
             try:
                 key = key_bytes.decode("utf-8")
                 value = value_bytes.decode("utf-8")
             except UnicodeDecodeError:
-                continue  # skip invalid entries
-            self._set_index(key, value)
-
-    def _set_index(self, key, value):
-        for i, (k, _) in enumerate(self.index):
-            if k == key:
-                self.index[i] = (key, value)
-                return
-        self.index.append((key, value))
+                continue
+            self.index[key] = value
 
     def set(self, key, value):
         try:
             key_bytes = key.encode("utf-8")
             value_bytes = value.encode("utf-8")
         except UnicodeEncodeError:
-            return  # skip invalid UTF-8
+            return
         with open(DATA_FILE, "ab") as f:
             f.write(struct.pack("II", len(key_bytes), len(value_bytes)))
             f.write(key_bytes)
             f.write(value_bytes)
-        self._set_index(key, value)
+        self.index[key] = value
 
     def get(self, key):
-        for k, v in self.index:
-            if k == key:
-                return v
-        return None
+        return self.index.get(key, None)
 
 def repl():
     db = KVStore()
