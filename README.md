@@ -1,0 +1,92 @@
+# CSCE 5350 Gradebot
+
+Automated code grading system for CSCE 5350 assignments.
+
+## Features
+
+- **Server Mode**: HTTP server for receiving and grading code submissions
+- **Client Mode**: CLI tool for submitting assignments for grading
+- **OpenAI Integration**: Uses GPT-4o Mini for code analysis and feedback
+- **Web Interface**: HTML dashboard for viewing submissions and grades
+- **Cross-Platform**: Native binaries for Linux, macOS, and Windows
+- **Koyeb Deployment**: Optimized for cloud deployment
+
+## Architecture
+
+### Overview
+
+The gradebot consists of:
+- **Server**: HTTP API server handling grading requests
+- **Client**: CLI tool for submitting assignments
+- **Rubrics**: Evaluation logic and test runners
+
+## Local Development
+
+### Setup
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/jh125486/CSCE5350_gradebot.git
+   cd CSCE5350_gradebot
+   ```
+
+2. **Set up environment variables**:
+   ```bash
+   # Copy the example environment file
+   cp .env.example .env
+   
+   # Edit .env with your actual secrets
+   nano .env  # or your preferred editor
+   ```
+
+3. **Install dependencies and build**:
+   ```bash
+   go mod tidy
+   make build
+   ```
+
+### Testing Locally
+
+The application automatically loads environment variables from a `.env` file when running locally.
+
+**Start the server**:
+```bash
+# Using Makefile
+make local-test
+
+# Or manually
+./bin/gradebot server --port 8080
+```
+
+**Test the client**:
+```bash
+# Submit a project for grading
+./bin/gradebot project1 --dir /path/to/your/project --run "python main.py"
+```
+
+### Environment Variables
+
+The following environment variables are required for full functionality:
+
+- `OPENAI_API_KEY`: Your OpenAI API key
+- `BUILD_ID`: Unique build identifier for authentication
+- `R2_ENDPOINT`: Cloudflare R2 endpoint URL
+- `AWS_ACCESS_KEY_ID`: R2 access key
+- `AWS_SECRET_ACCESS_KEY`: R2 secret key
+
+Optional variables:
+- `R2_BUCKET`: Custom bucket name (defaults to "gradebot-storage")
+- `AWS_REGION`: AWS region (defaults to "auto")
+- `USE_PATH_STYLE`: Use path-style S3 URLs (for LocalStack testing)
+
+## Usage
+
+Submit assignments for grading:
+
+```bash
+# Project 1
+./gradebot project1 --dir /path/to/project --run "python main.py"
+
+# Project 2
+./gradebot project2 --dir /path/to/project --run "go run main.go"
+```
