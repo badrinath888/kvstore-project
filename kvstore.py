@@ -1,7 +1,7 @@
-# file: kv_store.py
+# kvstore.py - clean UTF-8 version
+
 import sys
 import os
-import io
 
 DATA_FILE = "data.db"
 
@@ -28,8 +28,8 @@ class KeyValueStore:
         self.index.append((key, value))
 
     def set(self, key: str, value: str):
-        safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
+        safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
         with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
             f.write(f"SET {safe_key} {safe_value}\n")
             f.flush()
@@ -42,10 +42,11 @@ class KeyValueStore:
                 return v
         return None
 
+
 def main():
-    # UTF-8 safe stdin/stdout for Gradebot
-    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    # Clean UTF-8 streams
+    sys.stdin = open(sys.stdin.fileno(), mode="r", encoding="utf-8", errors="replace", buffering=1)
+    sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", buffering=1)
 
     store = KeyValueStore()
 
@@ -68,5 +69,7 @@ def main():
         else:
             print("ERR", flush=True)
 
+
 if __name__ == "__main__":
     main()
+
