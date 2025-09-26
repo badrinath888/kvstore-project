@@ -4,6 +4,7 @@
 """
 Persistent key-value store (UTF-8 safe version).
 Keys and values must be valid UTF-8 text.
+Invalid UTF-8 is rejected at write time, so GET will never return bad data.
 """
 
 import os
@@ -53,15 +54,18 @@ class KVStore:
             self.index[key] = value  # last write wins
 
     def set(self, key, value):
-        """Set key-value pair; keys and values must be UTF-8 strings."""
+        """Set key-value pair; reject if not valid UTF-8 or empty."""
         if not key or not value:
             return
 
         try:
+            # Round-trip to enforce valid UTF-8
             key_bytes = key.encode("utf-8")
             value_bytes = value.encode("utf-8")
-        except UnicodeEncodeError:
-            return  # invalid input, skip
+            key = key_bytes.decode("utf-8")
+            value = value_bytes.decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return  # reject invalid data
 
         with open(self.filename, "ab") as f:
             f.write(struct.pack("II", len(key_bytes), len(value_bytes)))
