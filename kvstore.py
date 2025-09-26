@@ -1,9 +1,9 @@
-# kvstore.py - clean UTF-8 version
-
+# file: kv_store.py
 import sys
 import os
 
 DATA_FILE = "data.db"
+
 
 class KeyValueStore:
     def __init__(self):
@@ -28,8 +28,8 @@ class KeyValueStore:
         self.index.append((key, value))
 
     def set(self, key: str, value: str):
-        safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
+        safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
             f.write(f"SET {safe_key} {safe_value}\n")
             f.flush()
@@ -44,17 +44,11 @@ class KeyValueStore:
 
 
 def main():
-    # Clean UTF-8 streams
-    sys.stdin = open(sys.stdin.fileno(), mode="r", encoding="utf-8", errors="replace", buffering=1)
-    sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", buffering=1)
-
     store = KeyValueStore()
-
     for line in sys.stdin:
         parts = line.strip().split(" ", 2)
         if not parts:
             continue
-
         cmd = parts[0].upper()
 
         if cmd == "EXIT":
@@ -65,11 +59,16 @@ def main():
         elif cmd == "GET" and len(parts) == 2:
             _, key = parts
             value = store.get(key)
-            print(value if value is not None else "NULL", flush=True)
+            # Encode output safely to UTF-8 and print
+            if value is not None:
+                sys.stdout.buffer.write((value + "\n").encode("utf-8"))
+            else:
+                sys.stdout.buffer.write(b"NULL\n")
+            sys.stdout.flush()
         else:
-            print("ERR", flush=True)
+            sys.stdout.buffer.write(b"ERR\n")
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":
     main()
-
