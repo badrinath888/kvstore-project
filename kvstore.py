@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-Persistent key-value store (binary-safe version).
-Keys must be UTF-8 strings. Values may be arbitrary bytes.
+Persistent key-value store (UTF-8 safe version).
+Keys and values must be valid UTF-8 text.
 """
 
 import os
 import struct
-import sys
 
 DEFAULT_DATA_FILE = "data.db"
 
@@ -16,7 +15,7 @@ DEFAULT_DATA_FILE = "data.db"
 class KVStore:
     def __init__(self, filename=DEFAULT_DATA_FILE):
         self.filename = filename
-        self.index = {}  # dict: key (str) -> value (bytes)
+        self.index = {}  # dict: key (str) -> value (str)
         if os.path.exists(self.filename):
             with open(self.filename, "r+b") as f:
                 self._load(f)
@@ -44,39 +43,35 @@ class KVStore:
 
             try:
                 key = key_bytes.decode("utf-8")
+                value = value_bytes.decode("utf-8")
             except UnicodeDecodeError:
-                continue  # skip invalid keys
-            if not key:
-                continue
-            self.index[key] = value_bytes  # store value as raw bytes
+                continue  # skip invalid UTF-8
+
+            if not key or not value:
+                continue  # skip empty key/value
+
+            self.index[key] = value  # last write wins
 
     def set(self, key, value):
-        """Set key-value pair; key is str, value is str or bytes."""
-        if not key or value is None:
+        """Set key-value pair; keys and values must be UTF-8 strings."""
+        if not key or not value:
             return
 
         try:
             key_bytes = key.encode("utf-8")
+            value_bytes = value.encode("utf-8")
         except UnicodeEncodeError:
-            return  # invalid key
-
-        # Accept str or bytes for value
-        if isinstance(value, str):
-            value_bytes = value.encode("utf-8", errors="replace")
-        elif isinstance(value, bytes):
-            value_bytes = value
-        else:
-            value_bytes = str(value).encode("utf-8", errors="replace")
+            return  # invalid input, skip
 
         with open(self.filename, "ab") as f:
             f.write(struct.pack("II", len(key_bytes), len(value_bytes)))
             f.write(key_bytes)
             f.write(value_bytes)
 
-        self.index[key] = value_bytes
+        self.index[key] = value
 
     def get(self, key):
-        """Get raw bytes for key; return None if not found."""
+        """Get value for key; return None if not found."""
         return self.index.get(key)
 
 
@@ -106,14 +101,7 @@ def repl():
             print("OK", flush=True)
         elif cmd == "GET" and len(parts) == 2:
             val = db.get(parts[1])
-            if val is None:
-                print("NULL", flush=True)
-            else:
-                try:
-                    print(val.decode("utf-8"), flush=True)
-                except UnicodeDecodeError:
-                    # Show as hex if not valid UTF-8
-                    print(val.hex(), flush=True)
+            print(val if val is not None else "NULL", flush=True)
         elif cmd == "EXIT":
             print("BYE", flush=True)
             break
