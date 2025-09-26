@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Simple persistent key-value store (Project 1)
-Gradebot-safe, UTF-8 clean version
-"""
-
 import os
 import struct
-import sys
 
 DATA_FILE = "data.db"
 
@@ -30,10 +24,10 @@ class KVStore:
             if len(key_bytes) < klen or len(value_bytes) < vlen:
                 break
             try:
-                key = key_bytes.decode('utf-8')
-                value = value_bytes.decode('utf-8')
+                key = key_bytes.decode("utf-8")
+                value = value_bytes.decode("utf-8")
             except UnicodeDecodeError:
-                continue  # skip invalid UTF-8
+                continue
             self._set_index(key, value)
 
     def _set_index(self, key, value):
@@ -45,10 +39,10 @@ class KVStore:
 
     def set(self, key, value):
         try:
-            key_bytes = key.encode('utf-8')
-            value_bytes = value.encode('utf-8')
+            key_bytes = key.encode("utf-8")
+            value_bytes = value.encode("utf-8")
         except UnicodeEncodeError:
-            return  # skip invalid input
+            return
         with open(DATA_FILE, "ab") as f:
             f.write(struct.pack("II", len(key_bytes), len(value_bytes)))
             f.write(key_bytes)
