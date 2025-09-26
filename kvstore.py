@@ -7,13 +7,13 @@ DATA_FILE = "data.db"
 
 class KeyValueStore:
     def __init__(self):
-        self.index = []  # list of (key, value)
+        self.index = []
         self.load_data()
 
     def load_data(self):
         if not os.path.exists(DATA_FILE):
             return
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
+        with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 parts = line.strip().split(" ", 2)
                 if len(parts) == 3 and parts[0] == "SET":
@@ -28,11 +28,13 @@ class KeyValueStore:
         self.index.append((key, value))
 
     def set(self, key: str, value: str):
-        with open(DATA_FILE, "a", encoding="utf-8") as f:
-            f.write(f"SET {key} {value}\n")
+        safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
+        safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
+        with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"SET {safe_key} {safe_value}\n")
             f.flush()
             os.fsync(f.fileno())
-        self._set_in_memory(key, value)
+        self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> str | None:
         for k, v in self.index:
@@ -42,6 +44,9 @@ class KeyValueStore:
 
 
 def main():
+    sys.stdin = open(sys.stdin.fileno(), mode="r", encoding="utf-8", errors="replace", buffering=1)
+    sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", buffering=1)
+
     store = KeyValueStore()
 
     for line in sys.stdin:
