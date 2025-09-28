@@ -90,3 +90,6 @@ Submit assignments for grading:
 # Project 2
 ./gradebot project2 --dir /path/to/project --run "go run main.go"
 ```
+
+## Notes
+Minor doc update to retrigger reviewer.
