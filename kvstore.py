@@ -1,39 +1,51 @@
-#!/usr/bin/env python3
-# Author: Badrinath | EUID: 11820168
-
+# file: kvstore.py
 import sys
 import os
 from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
 
-class KVError(Exception):
-    """Domain error for KV CLI misuse (e.g., wrong arity)."""
 
 class KeyValueStore:
-    """Append-only persistent key-value store with a linear in-memory index (no dict/map)."""
+    """Append-only persistent key-value store.
+
+    Design:
+      • Log file: human-readable lines "SET <key> <value>\n" in data.db
+      • Index: in-memory list[(key, value)] (no dict/map per assignment)
+      • Read: linear scan for key (last-write-wins semantics)
+      • Recovery: replay data.db at startup
+
+    Constraints:
+      • Values may contain spaces (parsed with split(maxsplit=2)).
+      • Durability: flush + fsync per SET.
+      • Invalid lines are ignored (robust recovery).
+    """
 
     def __init__(self) -> None:
-        """Create storage and rebuild index by replaying the append-only log if present."""
+        """Initialize storage and rebuild the in-memory index.
+
+        If data.db exists, all valid lines are replayed to reconstruct state.
+        """
         self.index: List[Tuple[str, str]] = []
         self.load_data()
 
     def load_data(self) -> None:
-        """Replay `data.db` and rebuild the in-memory index. Skips malformed lines safely."""
+        """Replay the append-only log into memory.
+
+        Each "SET key value" line is applied in order.
+        Older values are overwritten by newer ones.
+        """
         if not os.path.exists(DATA_FILE):
             return
         with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split(maxsplit=2)
-                if len(parts) == 3 and parts[0].upper() == "SET":
+                parts = line.strip().split(" ", 2)
+                if len(parts) == 3 and parts[0] == "SET":
                     _, key, value = parts
                     self._set_in_memory(key, value)
 
     def _set_in_memory(self, key: str, value: str) -> None:
-        """Overwrite existing key or append a new pair (O(n)). Last write wins."""
+        """Insert or update (key, value) in memory."""
         for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
@@ -41,9 +53,15 @@ class KeyValueStore:
         self.index.append((key, value))
 
     def set(self, key: str, value: str) -> None:
-        """Durably append SET to `data.db` (flush + fsync), then update memory."""
-        safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
+        """Persist and index a SET command.
+
+        Steps:
+          1. Append "SET key value" to data.db
+          2. Flush and fsync for durability
+          3. Update in-memory index
+        """
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
+        safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
             f.write(f"SET {safe_key} {safe_value}\n")
             f.flush()
@@ -51,63 +69,50 @@ class KeyValueStore:
         self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
-        """Return the latest value for `key`, or None if not found."""
+        """Return the most recent value for key or None if missing."""
         for k, v in self.index:
             if k == key:
                 return v
         return None
 
 
-def _err(msg: str) -> None:
-    """Write a normalized error line to STDOUT (kept for Gradebot’s expectations)."""
-    sys.stdout.buffer.write((f"ERR {msg}\n").encode("utf-8", errors="replace"))
+def _err() -> None:
+    """Write a standardized error message to stdout."""
+    sys.stdout.buffer.write(b"ERR\n")
     sys.stdout.flush()
 
+
 def main() -> None:
-    """CLI contract: SET <key> <value> | GET <key> | EXIT. Reads STDIN, writes STDOUT."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    """Command-line interface for the KV store.
 
+    Commands:
+      SET <key> <value> → store/update key
+      GET <key>         → retrieve value or NULL
+      EXIT              → quit program
+    """
     store = KeyValueStore()
-
-    for raw in sys.stdin:
-        line = raw.strip()
-        if not line:
+    for line in sys.stdin:
+        parts = line.strip().split(" ", 2)
+        if not parts:
             continue
-        parts = line.split(maxsplit=2)
-        cmd = parts[0].upper() if parts else ""
+        cmd = parts[0].upper()
 
-        try:
-            if cmd == "EXIT":
-                break
-            elif cmd == "SET":
-                if len(parts) != 3:
-                    raise KVError("wrong number of arguments for 'SET'")
-                _, key, value = parts
-                store.set(key, value)
-            elif cmd == "GET":
-                if len(parts) != 2:
-                    raise KVError("wrong number of arguments for 'GET'")
-                _, key = parts
-                value = store.get(key)
-                if value is None:
-                    sys.stdout.buffer.write(b"NULL\n")
-                else:
-                    sys.stdout.buffer.write((value + "\n").encode("utf-8", errors="replace"))
-                sys.stdout.flush()
+        if cmd == "EXIT":
+            break
+        elif cmd == "SET" and len(parts) == 3:
+            _, key, value = parts
+            store.set(key, value)
+        elif cmd == "GET" and len(parts) == 2:
+            _, key = parts
+            value = store.get(key)
+            if value is not None:
+                sys.stdout.buffer.write((value + "\n").encode("utf-8", errors="replace"))
             else:
-                raise KVError("unknown command")
-        except KVError as e:
-            _err(str(e))
-        except Exception as e:
-            # Defensive catch-all: never crash the grader
-            _err(f"internal error: {type(e).__name__}")
+                sys.stdout.buffer.write(b"NULL\n")
+            sys.stdout.flush()
+        else:
+            _err()
+
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        pass
+    main()
