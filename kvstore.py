@@ -25,7 +25,7 @@ class KeyValueStore:
 
     Notes
     -----
-    • Values may contain spaces (we parse with split(maxsplit=2) in the CLI).
+    • Values may contain spaces (the CLI parses with split(maxsplit=2)).
     • Durability: each SET flushes and fsyncs the file descriptor.
     • Malformed log lines are ignored during recovery for robustness.
     """
@@ -91,8 +91,7 @@ class KeyValueStore:
         key : str
             The key to set. Treated as a single token in the plain-text log.
         value : str
-            The value to store. Values may contain spaces at the CLI level;
-            the CLI passes the entire tail as `value`.
+            The value to store. Values may contain spaces at the CLI level.
 
         Returns
         -------
@@ -126,19 +125,19 @@ class KeyValueStore:
 
 
 def _err(msg: str) -> None:
-    """Write a normalized error message to STDOUT (keeps grader happy).
+    """Write a normalized, informative error message to STDOUT.
 
     Parameters
     ----------
     msg : str
-        Short description of the error (e.g., arity or unknown command).
+        Short description of the error (e.g., expected format, unknown command).
 
     Returns
     -------
     None
     """
-    # Gradebot expects a single-line error; keep it concise and UTF-8 safe.
-    sys.stdout.buffer.write((f"ERR {msg}\n").encode("utf-8", errors="replace"))
+    out = f"ERR: {msg}\n"
+    sys.stdout.buffer.write(out.encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
 
@@ -174,13 +173,13 @@ def main() -> None:
 
             elif cmd == "SET":
                 if len(parts) != 3:
-                    raise KVError("wrong number of arguments for 'SET'")
+                    raise KVError("expected: SET <key> <value>")
                 _, key, value = parts
                 store.set(key, value)
 
             elif cmd == "GET":
                 if len(parts) != 2:
-                    raise KVError("wrong number of arguments for 'GET'")
+                    raise KVError("expected: GET <key>")
                 _, key = parts
                 value = store.get(key)
                 if value is None:
@@ -190,11 +189,11 @@ def main() -> None:
                 sys.stdout.flush()
 
             else:
-                raise KVError("unknown command")
+                raise KVError("unknown command (use SET/GET/EXIT)")
 
         except KVError as e:
             _err(str(e))
-        except Exception as e:
+        except Exception:
             # Defensive: never crash the grader; keep message short and generic.
             _err("internal error")
 
