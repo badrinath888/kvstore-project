@@ -24,6 +24,7 @@ def run_cli(lines, cwd):
     stdout, _ = proc.communicate("\n".join(lines) + "\n")
     return [ln for ln in stdout.splitlines() if ln.strip() != ""]
 
+
 class TestKVStoreCLI(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="kv_cli_")
@@ -52,14 +53,31 @@ class TestKVStoreCLI(unittest.TestCase):
 
     def test_malformed_set(self):
         out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+        self.assertTrue(out[0].startswith("ERR:"))
 
     def test_get_extra_arg(self):
         out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+        self.assertTrue(out[0].startswith("ERR:"))
+
+    # ---- New Edge Case Tests -------------------------------------------------
+
+    def test_unknown_command(self):
+        out = run_cli(["FOO something", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR:"))
+
+    def test_empty_key(self):
+        out = run_cli(["SET  value_only", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR:"))
+
+    def test_large_value(self):
+        big_val = "X" * 5000
+        out = run_cli([f"SET big {big_val}", "GET big", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, [big_val])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 
 
 
