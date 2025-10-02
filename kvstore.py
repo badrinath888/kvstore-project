@@ -124,7 +124,7 @@ def main() -> None:
                 break
             elif cmd == "SET":
                 if len(args) != 2:
-                    _err("Usage: SET <key> <value>")
+                    _err("Usage: SET <key> <value> — both key and value are required")
                     continue
                 key, value = args
                 if not key.strip():
@@ -133,7 +133,7 @@ def main() -> None:
                 store.set(key.strip(), value)
             elif cmd == "GET":
                 if len(args) != 1:
-                    _err("Usage: GET <key>")
+                    _err("Usage: GET <key> — exactly one key required")
                     continue
                 key = args[0].strip()
                 if not key:
@@ -144,7 +144,7 @@ def main() -> None:
             elif cmd == "":
                 continue
             else:
-                _err("Unknown command (use SET/GET/EXIT)")
+                _err(f"Unknown command '{cmd}' (supported: SET, GET, EXIT)")
         except KVError as e:
             _err(str(e))
         except OSError as e:
@@ -158,3 +158,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
