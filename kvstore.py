@@ -9,65 +9,41 @@ from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
 
-
 class KVError(Exception):
     """Custom exception for invalid CLI usage (wrong args, unknown command)."""
     pass
-
 
 class KeyValueStore:
     """
     Append-only persistent key-value store with a simple in-memory index.
 
-    Design
-    ------
-    • Data is logged in `data.db` as lines: "SET <key> <value>".
-    • On startup, the log is replayed into an in-memory list of (key, value) pairs.
-    • **Last-write-wins**: the latest SET for a key overwrites older values.
-    • No built-in dictionaries/maps are used (per assignment restriction).
+    • Log lines: "SET <key> <value>" in data.db (append-only)
+    • Replay log on startup to rebuild index
+    • Last-write-wins; no built-in dict/map (assignment rule)
     """
 
     def __init__(self) -> None:
-        """Initialize the store and rebuild the in-memory index by log replay."""
         self.index: List[Tuple[str, str]] = []
         self.load_data()
 
     def load_data(self) -> None:
-        """
-        Replay the append-only log into memory.
-
-        Iterates `data.db` line by line. Only lines exactly matching
-        "SET <key> <value>" (space-delimited, 3 tokens, case-insensitive SET)
-        are applied. Malformed/truncated lines are skipped for robustness.
-        """
+        """Replay the append-only log into memory; skip malformed lines."""
         if not os.path.exists(DATA_FILE):
             return
-
         try:
-            with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as file:
-                for line in file:
-                    clean = line.strip()
-                    if not clean:
+            with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line:
                         continue
-                    parts = clean.split(maxsplit=2)
+                    parts = line.split(maxsplit=2)
                     if len(parts) == 3 and parts[0].upper() == "SET":
                         _, key, value = parts
                         self._set_in_memory(key, value)
         except OSError as e:
-            # Don’t crash; surface a clear error for quality review.
             sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {e.strerror}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
-        """
-        Insert or overwrite a (key, value) pair in the in-memory linear index.
-
-        Parameters
-        ----------
-        key : str
-            Key to store (single token).
-        value : str
-            Associated value (arbitrary UTF-8 text).
-        """
         for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
@@ -75,15 +51,7 @@ class KeyValueStore:
         self.index.append((key, value))
 
     def set(self, key: str, value: str) -> None:
-        """
-        Persist and index a SET operation with flush + fsync for durability.
-
-        Steps
-        -----
-        1) Append "SET <key> <value>\\n" to `data.db`
-        2) Flush and fsync file descriptor
-        3) Update in-memory index
-        """
+        """Append to log (flush+fsync) then update in-memory index."""
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
         try:
@@ -97,38 +65,21 @@ class KeyValueStore:
         self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
-        """
-        Retrieve the most recent value for a key.
-
-        Returns
-        -------
-        Optional[str] : the latest value if present; else None
-        """
         for k, v in self.index:
             if k == key:
                 return v
         return None
 
-
-# ───── CLI helpers ────────────────────────────────────────────────────────────
+# ---- CLI helpers -------------------------------------------------------------
 
 def _write_line(text: str) -> None:
-    """Write a single line to STDOUT in UTF-8 and flush."""
     sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
-
 def _err(msg: str) -> None:
-    """Write a normalized error line to STDOUT."""
     _write_line(f"ERR: {msg}")
 
-
 def _parse_command(line: str) -> Tuple[str, List[str]]:
-    """
-    Parse a raw input line into (command, args).
-
-    Split into at most 3 parts so SET values can include spaces.
-    """
     parts = line.strip().split(maxsplit=2)
     if not parts:
         return "", []
@@ -140,17 +91,7 @@ def _parse_command(line: str) -> Tuple[str, List[str]]:
         args.append(parts[2])
     return cmd, args
 
-
 def main() -> None:
-    """
-    Main CLI loop.
-
-    Commands
-    --------
-    • SET <key> <value>
-    • GET <key>
-    • EXIT
-    """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -163,7 +104,6 @@ def main() -> None:
         line = raw.strip()
         if not line:
             continue
-
         cmd, args = _parse_command(line)
         try:
             if cmd == "EXIT":
@@ -190,9 +130,9 @@ def main() -> None:
         except Exception as e:
             _err(f"unexpected {type(e).__name__} — {str(e)}")
 
-
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         pass
+
