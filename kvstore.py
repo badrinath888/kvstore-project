@@ -23,7 +23,7 @@ class KeyValueStore:
     ------
     • Data is logged in `data.db` with lines formatted as "SET <key> <value>".
     • On startup, the log is replayed into an in-memory list of (key, value) pairs.
-    • The index uses **last-write-wins** semantics: the latest SET overwrites older values.
+    • The index uses last-write-wins semantics: the latest SET overwrites older values.
     • No built-in dictionaries or maps are used (per assignment restriction).
     """
 
@@ -52,7 +52,6 @@ class KeyValueStore:
                         _, key, value = parts
                         self._set_in_memory(key, value)
         except FileNotFoundError:
-            # File may be deleted between check and open
             sys.stderr.write(f"Warning: {DATA_FILE} not found during load.\n")
         except PermissionError:
             sys.stderr.write(f"Error: permission denied reading {DATA_FILE}.\n")
@@ -77,7 +76,6 @@ class KeyValueStore:
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
         try:
-            # context manager ensures proper close even on error
             with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as file:
                 file.write(f"SET {safe_key} {safe_value}\n")
                 file.flush()
@@ -162,8 +160,7 @@ def main() -> None:
         except OSError as e:
             _err(f"filesystem error: {e}")
         except Exception as e:
-    _err(f"internal error: {str(e)}")
-
+            _err(f"internal error: {str(e)}")
 
 
 if __name__ == "__main__":
@@ -171,5 +168,6 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
 
 
