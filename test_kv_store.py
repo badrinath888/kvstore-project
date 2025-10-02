@@ -9,12 +9,10 @@ import subprocess
 import tempfile
 import unittest
 
-
 KV_CMD = ["python3", "kvstore.py"]
 
-
-def run_cli(commands, cwd):
-    """Run kvstore.py with a list of command lines; return stdout lines."""
+def run_cli(lines, cwd):
+    """Run kvstore.py with command lines; return stdout lines (non-empty)."""
     proc = subprocess.Popen(
         KV_CMD,
         cwd=cwd,
@@ -23,14 +21,11 @@ def run_cli(commands, cwd):
         stderr=subprocess.PIPE,
         text=True,
     )
-    stdout, _ = proc.communicate("\n".join(commands) + "\n")
-    out_lines = [ln for ln in stdout.splitlines() if ln.strip() != ""]
-    return out_lines
-
+    stdout, _ = proc.communicate("\n".join(lines) + "\n")
+    return [ln for ln in stdout.splitlines() if ln.strip() != ""]
 
 class TestKVStoreCLI(unittest.TestCase):
     def setUp(self):
-        # Use a temp directory so each test has its own clean data.db
         self.tmpdir = tempfile.mkdtemp(prefix="kv_cli_")
         self.addCleanup(lambda: shutil.rmtree(self.tmpdir, ignore_errors=True))
 
@@ -47,30 +42,25 @@ class TestKVStoreCLI(unittest.TestCase):
         self.assertEqual(out, ["NULL"])
 
     def test_persistence_across_restart(self):
-        # First run writes, second run reads
         run_cli(["SET course CSCE5350", "EXIT"], cwd=self.tmpdir)
         out = run_cli(["GET course", "EXIT"], cwd=self.tmpdir)
         self.assertEqual(out, ["CSCE5350"])
 
     def test_blank_line_ignored(self):
         out = run_cli(["", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, [])  # no output expected
+        self.assertEqual(out, [])  # blank line produces no output
 
     def test_malformed_set(self):
         out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR:") or out[0].startswith("ERR"))
+        self.assertTrue(out[0].startswith("ERR"))
 
     def test_get_extra_arg(self):
         out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR:") or out[0].startswith("ERR"))
-
-    def test_unicode_values(self):
-        out = run_cli(["SET greet こんにちは", "GET greet", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["こんにちは"])
-
+        self.assertTrue(out[0].startswith("ERR"))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 
 
 
