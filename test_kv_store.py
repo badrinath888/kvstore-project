@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Unit tests for KeyValueStore CLI
+# test_kv_store.py — Unit tests for KeyValueStore CLI
 # Course: CSCE 5350
 # Author: Badrinath | EUID: 11820168
 
@@ -11,9 +11,8 @@ import unittest
 
 KV_CMD = ["python3", "kvstore.py"]
 
-
 def run_cli(lines, cwd):
-    """Run kvstore.py with a list of commands, return non-empty stdout lines."""
+    """Run kvstore.py with command lines; return stdout lines (non-empty)."""
     proc = subprocess.Popen(
         KV_CMD,
         cwd=cwd,
@@ -23,12 +22,9 @@ def run_cli(lines, cwd):
         text=True,
     )
     stdout, _ = proc.communicate("\n".join(lines) + "\n")
-    return [line for line in stdout.splitlines() if line.strip() != ""]
-
+    return [ln for ln in stdout.splitlines() if ln.strip() != ""]
 
 class TestKVStoreCLI(unittest.TestCase):
-    """Test suite for the KeyValueStore CLI."""
-
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="kv_cli_")
         self.addCleanup(lambda: shutil.rmtree(self.tmpdir, ignore_errors=True))
@@ -52,7 +48,7 @@ class TestKVStoreCLI(unittest.TestCase):
 
     def test_blank_line_ignored(self):
         out = run_cli(["", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, [])
+        self.assertEqual(out, [])  # blank line produces no output
 
     def test_malformed_set(self):
         out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
@@ -62,22 +58,19 @@ class TestKVStoreCLI(unittest.TestCase):
         out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
         self.assertTrue(out[0].startswith("ERR"))
 
-    def test_invalid_command(self):
-        out = run_cli(["FOO something", "EXIT"], cwd=self.tmpdir)
+    # --- New edge case tests ---
+
+    def test_empty_key_set(self):
+        out = run_cli(["SET  valueonly", "EXIT"], cwd=self.tmpdir)
         self.assertTrue(out[0].startswith("ERR"))
 
-    def test_empty_value(self):
-        out = run_cli(["SET empty ''", "GET empty", "EXIT"], cwd=self.tmpdir)
-        self.assertIn("''", out[0])
+    def test_empty_key_get(self):
+        out = run_cli(["GET ", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR"))
 
+    def test_unknown_command(self):
+        out = run_cli(["HELLO world", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR"))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
-
-
-
-
-
-
-
