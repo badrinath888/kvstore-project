@@ -2,4 +2,7 @@ data.db
 __pycache__/
 *.pyc
 gradebot
+store.py
+errors.py
+
 
