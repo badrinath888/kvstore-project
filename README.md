@@ -34,19 +34,6 @@ GET course
 CSCE5350
 EXIT
 
-git add README.md
-git commit -m "Docs: expanded README with examples & EUID (CSCE 5350, Badrinath 11820168)"
-git push origin main
-
-exit
-cd ~/kvstore-project
-
-echo -e "data.db\n__pycache__/" >> .gitignore
-git rm --cached data.db || true
-git rm -r --cached __pycache__ || true
-git add .gitignore
-git commit -m "Cleanup: ignore runtime files (Badrinath, EUID 11820168)"
-git push origin main
 
 
 
