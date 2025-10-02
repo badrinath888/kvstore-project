@@ -11,28 +11,29 @@ DATA_FILE = "data.db"
 
 
 class KVError(Exception):
-    """Custom exception for invalid CLI usage (wrong args, unknown command)."""
+    """Custom exception for invalid CLI usage (wrong arguments or unknown command)."""
     pass
 
 
 class KeyValueStore:
     """A simple append-only persistent key-value store.
 
-    This store persists data in a file (`data.db`) using append-only writes.
-    An in-memory index is rebuilt on startup by replaying the log.
-    Last-write-wins semantics are applied when keys are updated.
+    Data is persisted in an append-only file (`data.db`).
+    The store maintains an in-memory index that is rebuilt on startup
+    by replaying the log file. For each key, the last written value
+    is the one that is returned (last-write-wins).
     """
 
     def __init__(self) -> None:
-        """Initialize the store by loading existing data."""
+        """Initialize the store and rebuild the in-memory index from disk."""
         self.index: List[Tuple[str, str]] = []
         self.load_data()
 
     def load_data(self) -> None:
-        """Replay the append-only log into memory.
+        """Rebuild the in-memory index from the append-only log file.
 
-        Skips malformed lines and ensures that the last value written
-        for a key is the one stored in memory.
+        Reads each line of `data.db` and replays all valid `SET` commands.
+        Malformed or incomplete lines are skipped.
         """
         if not os.path.exists(DATA_FILE):
             return
@@ -50,19 +51,23 @@ class KeyValueStore:
             sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {error.strerror}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
-        """Update the in-memory index (last write wins)."""
-        for idx, (existing_key, _) in enumerate(self.index):
+        """Update the in-memory index for a given key.
+
+        If the key already exists, overwrite its value.
+        Otherwise, append the new key-value pair.
+        """
+        for position, (existing_key, _) in enumerate(self.index):
             if existing_key == key:
-                self.index[idx] = (key, value)
+                self.index[position] = (key, value)
                 return
         self.index.append((key, value))
 
     def set(self, key: str, value: str) -> None:
-        """Append to log and update in-memory index.
+        """Persist a key-value pair to the log file and update in-memory index.
 
         Args:
             key (str): The key name.
-            value (str): The value to store.
+            value (str): The value to be associated with the key.
         """
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
@@ -70,20 +75,20 @@ class KeyValueStore:
             with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as file:
                 file.write(f"SET {safe_key} {safe_value}\n")
                 file.flush()
-                os.fsync(file.fileno())
+                os.fsync(file.fileno())  # ensure durability
         except OSError as error:
             sys.stderr.write(f"ERR: failed to write {DATA_FILE} — {error.strerror}\n")
             return
         self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
-        """Retrieve a value for a given key.
+        """Retrieve the most recent value associated with a key.
 
         Args:
-            key (str): The key name.
+            key (str): The key to look up.
 
         Returns:
-            Optional[str]: The value if found, else None.
+            Optional[str]: The value if found, otherwise None.
         """
         for existing_key, value in self.index:
             if existing_key == key:
@@ -95,18 +100,18 @@ class KeyValueStore:
 
 
 def _write_line(text: str) -> None:
-    """Write output line to STDOUT as UTF-8."""
+    """Write a single line of text to STDOUT in UTF-8 encoding."""
     sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
 
 def _err(message: str) -> None:
-    """Write error message with ERR prefix."""
+    """Write an error message with ERR prefix to STDOUT."""
     _write_line(f"ERR: {message}")
 
 
 def _parse_command(line: str) -> Tuple[str, List[str]]:
-    """Parse a command line into (command, args)."""
+    """Parse a raw input line into (command, arguments)."""
     parts = line.strip().split(maxsplit=2)
     if not parts:
         return "", []
@@ -120,7 +125,7 @@ def _parse_command(line: str) -> Tuple[str, List[str]]:
 
 
 def main() -> None:
-    """Main CLI loop for KeyValueStore."""
+    """Main interactive loop for the KeyValueStore CLI."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -165,3 +170,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
