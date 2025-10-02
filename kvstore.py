@@ -162,7 +162,8 @@ def main() -> None:
         except OSError as e:
             _err(f"filesystem error: {e}")
         except Exception as e:
-            _err(f"unexpected internal error: {e}")
+    _err(f"internal error: {str(e)}")
+
 
 
 if __name__ == "__main__":
