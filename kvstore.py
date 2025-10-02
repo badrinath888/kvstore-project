@@ -8,6 +8,8 @@ import sys
 from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
+MAX_KEY_LENGTH = 100
+MAX_VALUE_LENGTH = 1000
 
 class KVError(Exception):
     """Custom exception for invalid CLI usage (wrong args, unknown command)."""
@@ -43,7 +45,7 @@ class KeyValueStore:
                         _, key, value = parts
                         self._set_in_memory(key, value)
         except OSError as e:
-            sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {e.strerror}\n")
+            sys.stderr.write(f"ERR: Failed to load {DATA_FILE} — {e.strerror}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
         """Insert or update the in-memory key-value index."""
@@ -63,7 +65,7 @@ class KeyValueStore:
                 f.flush()
                 os.fsync(f.fileno())
         except OSError as e:
-            sys.stderr.write(f"ERR: failed to write {DATA_FILE} — {e.strerror}\n")
+            sys.stderr.write(f"ERR: Failed to write {DATA_FILE} — {e.strerror}\n")
             return
         self._set_in_memory(safe_key, safe_value)
 
@@ -124,27 +126,39 @@ def main() -> None:
                 break
             elif cmd == "SET":
                 if len(args) != 2:
-                    _err("Usage: SET <key> <value> — both key and value are required")
+                    _err("Invalid SET — usage: SET <key> <value>")
                     continue
                 key, value = args
                 if not key.strip():
-                    _err("Key cannot be empty")
+                    _err("Invalid SET — key cannot be empty or whitespace")
+                    continue
+                if len(key) > MAX_KEY_LENGTH:
+                    _err(f"Invalid SET — key too long (> {MAX_KEY_LENGTH} chars)")
+                    continue
+                if not value.strip():
+                    _err("Invalid SET — value cannot be empty or whitespace")
+                    continue
+                if len(value) > MAX_VALUE_LENGTH:
+                    _err(f"Invalid SET — value too long (> {MAX_VALUE_LENGTH} chars)")
                     continue
                 store.set(key.strip(), value)
             elif cmd == "GET":
                 if len(args) != 1:
-                    _err("Usage: GET <key> — exactly one key required")
+                    _err("Invalid GET — usage: GET <key>")
                     continue
                 key = args[0].strip()
                 if not key:
-                    _err("Key cannot be empty")
+                    _err("Invalid GET — key cannot be empty or whitespace")
+                    continue
+                if len(key) > MAX_KEY_LENGTH:
+                    _err(f"Invalid GET — key too long (> {MAX_KEY_LENGTH} chars)")
                     continue
                 value = store.get(key)
                 _write_line(value if value is not None else "NULL")
             elif cmd == "":
                 continue
             else:
-                _err(f"Unknown command '{cmd}' (supported: SET, GET, EXIT)")
+                _err(f"Unknown command '{cmd}' — valid commands are SET, GET, EXIT")
         except KVError as e:
             _err(str(e))
         except OSError as e:
@@ -158,4 +172,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
 
