@@ -180,10 +180,13 @@ def main() -> None:
                 continue
             else:
                 raise KVError("unknown command (use SET/GET/EXIT)")
-        except KVError as e:
+                except KVError as e:
             _err(str(e))
+        except OSError as e:
+            _err(f"ERR: file operation failed — {e.strerror}")
         except Exception as e:
-            _err(f"internal error: {str(e)}")
+            _err(f"ERR: unexpected internal error — {type(e).__name__}")
+
 
 
 if __name__ == "__main__":
