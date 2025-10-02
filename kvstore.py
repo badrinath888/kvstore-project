@@ -9,150 +9,118 @@ from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
 
+
 class KVError(Exception):
     """Custom exception for invalid CLI usage (wrong args, unknown command)."""
     pass
 
 
 class KeyValueStore:
-    """
-    Append-only persistent key-value store with a simple in-memory index.
+    """A simple append-only persistent key-value store.
 
-    • Log lines: "SET <key> <value>" in data.db (append-only)
-    • Replay log on startup to rebuild index
-    • Last-write-wins; no built-in dict/map (assignment rule)
+    This store persists data in a file (`data.db`) using append-only writes.
+    An in-memory index is rebuilt on startup by replaying the log.
+    Last-write-wins semantics are applied when keys are updated.
     """
 
     def __init__(self) -> None:
-        """
-        Initialize the key-value store.
-
-        Loads existing data from the append-only log file (`data.db`)
-        into memory to rebuild the index.
-        """
+        """Initialize the store by loading existing data."""
         self.index: List[Tuple[str, str]] = []
         self.load_data()
 
     def load_data(self) -> None:
-        """
-        Replay the append-only log into memory.
+        """Replay the append-only log into memory.
 
-        Skips malformed lines that do not follow the "SET <key> <value>" format.
-
-        Raises:
-            OSError: If reading the log file fails.
+        Skips malformed lines and ensures that the last value written
+        for a key is the one stored in memory.
         """
         if not os.path.exists(DATA_FILE):
             return
         try:
-            with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
-                for line_raw in f:
-                    line = line_raw.strip()
+            with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as file:
+                for raw_line in file:
+                    line = raw_line.strip()
                     if not line:
                         continue
-                    tokens = line.split(maxsplit=2)
-                    if len(tokens) == 3 and tokens[0].upper() == "SET":
-                        _, key, value = tokens
+                    parts = line.split(maxsplit=2)
+                    if len(parts) == 3 and parts[0].upper() == "SET":
+                        _, key, value = parts
                         self._set_in_memory(key, value)
-        except OSError as e:
-            sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {e.strerror}\n")
+        except OSError as error:
+            sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {error.strerror}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
-        """
-        Update the in-memory index with the latest key-value pair.
-
-        Args:
-            key (str): The key to update.
-            value (str): The value associated with the key.
-        """
-        for i, (k, _) in enumerate(self.index):
-            if k == key:
-                self.index[i] = (key, value)
+        """Update the in-memory index (last write wins)."""
+        for idx, (existing_key, _) in enumerate(self.index):
+            if existing_key == key:
+                self.index[idx] = (key, value)
                 return
         self.index.append((key, value))
 
     def set(self, key: str, value: str) -> None:
-        """
-        Store a new key-value pair in the database.
-
-        This appends the entry to the log file and updates the in-memory
-        index. If the key already exists, its value is overwritten.
+        """Append to log and update in-memory index.
 
         Args:
-            key (str): The key to store.
-            value (str): The value associated with the key.
-
-        Raises:
-            OSError: If writing to the log file fails.
+            key (str): The key name.
+            value (str): The value to store.
         """
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
         try:
-            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
-                f.write(f"SET {safe_key} {safe_value}\n")
-                f.flush()
-                os.fsync(f.fileno())
-        except OSError as e:
-            sys.stderr.write(f"ERR: failed to write {DATA_FILE} — {e.strerror}\n")
+            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as file:
+                file.write(f"SET {safe_key} {safe_value}\n")
+                file.flush()
+                os.fsync(file.fileno())
+        except OSError as error:
+            sys.stderr.write(f"ERR: failed to write {DATA_FILE} — {error.strerror}\n")
             return
         self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
-        """
-        Retrieve the value associated with a given key.
+        """Retrieve a value for a given key.
 
         Args:
-            key (str): The key to look up in the store.
+            key (str): The key name.
 
         Returns:
-            Optional[str]: The most recent value for the key if it exists,
-            otherwise None.
+            Optional[str]: The value if found, else None.
         """
-        for k, v in self.index:
-            if k == key:
-                return v
+        for existing_key, value in self.index:
+            if existing_key == key:
+                return value
         return None
 
 
 # ---- CLI helpers -------------------------------------------------------------
 
-def _write_line(text: str) -> None:
-    """
-    Write a line of text to stdout in UTF-8 encoding.
 
-    Args:
-        text (str): The line of text to output.
-    """
+def _write_line(text: str) -> None:
+    """Write output line to STDOUT as UTF-8."""
     sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
-def _err(msg: str) -> None:
-    """Output a formatted error message."""
-    _write_line(f"ERR: {msg}")
+
+def _err(message: str) -> None:
+    """Write error message with ERR prefix."""
+    _write_line(f"ERR: {message}")
+
 
 def _parse_command(line: str) -> Tuple[str, List[str]]:
-    """
-    Parse a command line into a command and argument list.
-
-    Args:
-        line (str): The raw input line.
-
-    Returns:
-        Tuple[str, List[str]]: The command (uppercase) and its arguments.
-    """
-    tokens = line.strip().split(maxsplit=2)
-    if not tokens:
+    """Parse a command line into (command, args)."""
+    parts = line.strip().split(maxsplit=2)
+    if not parts:
         return "", []
-    cmd = tokens[0].upper()
-    args: List[str] = []
-    if len(tokens) > 1:
-        args.append(tokens[1])
-    if len(tokens) > 2:
-        args.append(tokens[2])
-    return cmd, args
+    command = parts[0].upper()
+    arguments: List[str] = []
+    if len(parts) > 1:
+        arguments.append(parts[1])
+    if len(parts) > 2:
+        arguments.append(parts[2])
+    return command, arguments
+
 
 def main() -> None:
-    """Main CLI loop for processing SET/GET/EXIT commands."""
+    """Main CLI loop for KeyValueStore."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -165,31 +133,32 @@ def main() -> None:
         line = raw_line.strip()
         if not line:
             continue
-        cmd, args = _parse_command(line)
+        command, arguments = _parse_command(line)
         try:
-            if cmd == "EXIT":
+            if command == "EXIT":
                 break
-            elif cmd == "SET":
-                if len(args) != 2:
+            elif command == "SET":
+                if len(arguments) != 2:
                     raise KVError("expected: SET <key> <value>")
-                key, value = args
-                store.set(key, value)
-            elif cmd == "GET":
-                if len(args) != 1:
+                key_name, key_value = arguments
+                store.set(key_name, key_value)
+            elif command == "GET":
+                if len(arguments) != 1:
                     raise KVError("expected: GET <key>")
-                key = args[0]
-                value = store.get(key)
+                key_name = arguments[0]
+                value = store.get(key_name)
                 _write_line(value if value is not None else "NULL")
-            elif cmd == "":
+            elif command == "":
                 continue
             else:
                 raise KVError("unknown command (use SET/GET/EXIT)")
-        except KVError as e:
-            _err(str(e))
-        except OSError as e:
-            _err(f"file operation failed — {e.strerror}")
-        except Exception as e:
-            _err(f"unexpected {type(e).__name__} — {str(e)}")
+        except KVError as error:
+            _err(str(error))
+        except OSError as error:
+            _err(f"file operation failed — {error.strerror}")
+        except Exception as error:
+            _err(f"unexpected {type(error).__name__} — {str(error)}")
+
 
 if __name__ == "__main__":
     try:
