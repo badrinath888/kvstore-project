@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 
 gradebot
+data.db
+__pycache__/
