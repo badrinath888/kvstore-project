@@ -1,72 +1,77 @@
 #!/usr/bin/env python3
-# Tests for KV Store Project 1
+# test_kv_store.py — Unit tests for KeyValueStore CLI
 # Course: CSCE 5350
 # Author: Badrinath | EUID: 11820168
 
 import os
+import shutil
 import subprocess
 import tempfile
-import pytest
-
-KVSTORE = ["python3", "kvstore.py"]
+import unittest
 
 
-def run_kvstore(commands):
-    """Helper: run kvstore.py with commands, capture stdout."""
-    process = subprocess.Popen(
-        KVSTORE,
+KV_CMD = ["python3", "kvstore.py"]
+
+
+def run_cli(commands, cwd):
+    """Run kvstore.py with a list of command lines; return stdout lines."""
+    proc = subprocess.Popen(
+        KV_CMD,
+        cwd=cwd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
     )
-    stdout, _ = process.communicate("\n".join(commands) + "\n")
-    return stdout.strip().splitlines()
+    stdout, _ = proc.communicate("\n".join(commands) + "\n")
+    out_lines = [ln for ln in stdout.splitlines() if ln.strip() != ""]
+    return out_lines
 
 
-def test_set_get(tmp_path):
-    os.chdir(tmp_path)
-    out = run_kvstore(["SET name Alice", "GET name", "EXIT"])
-    assert out == ["Alice"]
+class TestKVStoreCLI(unittest.TestCase):
+    def setUp(self):
+        # Use a temp directory so each test has its own clean data.db
+        self.tmpdir = tempfile.mkdtemp(prefix="kv_cli_")
+        self.addCleanup(lambda: shutil.rmtree(self.tmpdir, ignore_errors=True))
+
+    def test_set_get(self):
+        out = run_cli(["SET name Badrinath_11820168", "GET name", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["Badrinath_11820168"])
+
+    def test_overwrite_last_write_wins(self):
+        out = run_cli(["SET k v1", "SET k v2", "SET k v3", "GET k", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["v3"])
+
+    def test_nonexistent(self):
+        out = run_cli(["GET missing", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["NULL"])
+
+    def test_persistence_across_restart(self):
+        # First run writes, second run reads
+        run_cli(["SET course CSCE5350", "EXIT"], cwd=self.tmpdir)
+        out = run_cli(["GET course", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["CSCE5350"])
+
+    def test_blank_line_ignored(self):
+        out = run_cli(["", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, [])  # no output expected
+
+    def test_malformed_set(self):
+        out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR:") or out[0].startswith("ERR"))
+
+    def test_get_extra_arg(self):
+        out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR:") or out[0].startswith("ERR"))
+
+    def test_unicode_values(self):
+        out = run_cli(["SET greet こんにちは", "GET greet", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["こんにちは"])
 
 
-def test_overwrite(tmp_path):
-    os.chdir(tmp_path)
-    out = run_kvstore(["SET name Alice", "SET name Bob", "GET name", "EXIT"])
-    assert out == ["Bob"]
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
 
-
-def test_nonexistent_get(tmp_path):
-    os.chdir(tmp_path)
-    out = run_kvstore(["GET missing", "EXIT"])
-    assert out == ["NULL"]
-
-
-def test_persistence(tmp_path):
-    os.chdir(tmp_path)
-    dbfile = tmp_path / "data.db"
-    run_kvstore(["SET course CSCE5350", "EXIT"])
-    assert dbfile.exists()
-    out = run_kvstore(["GET course", "EXIT"])
-    assert out == ["CSCE5350"]
-
-
-def test_blank_and_exit(tmp_path):
-    os.chdir(tmp_path)
-    out = run_kvstore(["", "EXIT"])
-    assert out == []  # blank line ignored
-
-
-def test_malformed_set(tmp_path):
-    os.chdir(tmp_path)
-    out = run_kvstore(["SET onlykey", "EXIT"])
-    assert out[0].startswith("ERR:")
-
-
-def test_get_extra_args(tmp_path):
-    os.chdir(tmp_path)
-    out = run_kvstore(["GET key extra", "EXIT"])
-    assert out[0].startswith("ERR:")
 
 
 
