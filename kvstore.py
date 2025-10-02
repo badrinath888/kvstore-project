@@ -23,7 +23,7 @@ class KeyValueStore:
         self.load_data()
 
     def load_data(self) -> None:
-        """Replay the log into memory; tolerate partial or bad lines."""
+        """Replay the log into memory; tolerate partial or corrupted lines."""
         if not os.path.exists(DATA_FILE):
             return
         try:
@@ -33,10 +33,10 @@ class KeyValueStore:
                     if len(parts) == 3 and parts[0].upper() == "SET":
                         _, key, value = parts
                         self._set_in_memory(key, value)
-                    # if line malformed: skip (robustness)
-        except Exception as e:
-            # Do not crash on load — log to stdout and continue
-            sys.stdout.write(f"ERR: could not load data.db ({e})\n")
+        except OSError as e:
+            sys.stdout.write(f"ERR: file read error ({e})\n")
+        except UnicodeDecodeError as e:
+            sys.stdout.write(f"ERR: encoding issue in log ({e})\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
         """Insert or overwrite (key, value) in memory."""
@@ -50,10 +50,14 @@ class KeyValueStore:
         """Persist and store a key-value pair."""
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
-        with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
-            f.write(f"SET {safe_key} {safe_value}\n")
-            f.flush()
-            os.fsync(f.fileno())
+        try:
+            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
+                f.write(f"SET {safe_key} {safe_value}\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError as e:
+            sys.stdout.write(f"ERR: could not write to data.db ({e})\n")
+            return
         self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
@@ -92,7 +96,8 @@ def main() -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
+    except (AttributeError, OSError):
+        # Ignore if not supported
         pass
 
     store = KeyValueStore()
@@ -123,8 +128,11 @@ def main() -> None:
                 raise KVError("unknown command (use SET/GET/EXIT)")
         except KVError as e:
             _err(str(e))
-        except Exception:
-            _err("internal error")
+        except OSError as e:
+            _err(f"file system error: {e}")
+        except Exception as e:
+            # No bare except anymore → show controlled message
+            _err(f"unexpected error: {type(e).__name__} - {e}")
 
 
 if __name__ == "__main__":
@@ -132,3 +140,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
