@@ -21,14 +21,14 @@ class KeyValueStore:
 
     Design
     ------
-    • Data is logged in `data.db` with lines formatted as "SET <key> <value>".
+    • Data is logged in `data.db` as lines: "SET <key> <value>".
     • On startup, the log is replayed into an in-memory list of (key, value) pairs.
-    • The index uses **last-write-wins** semantics: the latest SET overwrites older values.
-    • No built-in dictionaries or maps are used (per assignment restriction).
+    • **Last-write-wins**: the latest SET for a key overwrites older values.
+    • No built-in dictionaries/maps are used (per assignment restriction).
     """
 
     def __init__(self) -> None:
-        """Initialize the store and rebuild in-memory index from log replay."""
+        """Initialize the store and rebuild the in-memory index by log replay."""
         self.index: List[Tuple[str, str]] = []
         self.load_data()
 
@@ -36,10 +36,9 @@ class KeyValueStore:
         """
         Replay the append-only log into memory.
 
-        Reads each line from `data.db`. Valid lines of the form "SET <key> <value>"
-        update the in-memory index so that the newest value for a key replaces the old one.
-
-        Malformed or truncated lines are ignored for robustness.
+        Iterates `data.db` line by line. Only lines exactly matching
+        "SET <key> <value>" (space-delimited, 3 tokens, case-insensitive SET)
+        are applied. Malformed/truncated lines are skipped for robustness.
         """
         if not os.path.exists(DATA_FILE):
             return
@@ -47,52 +46,53 @@ class KeyValueStore:
         try:
             with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as file:
                 for line in file:
-                    clean_line = line.strip()
-                    if not clean_line:
+                    clean = line.strip()
+                    if not clean:
                         continue
-                    parts = clean_line.split(maxsplit=2)
+                    parts = clean.split(maxsplit=2)
                     if len(parts) == 3 and parts[0].upper() == "SET":
                         _, key, value = parts
                         self._set_in_memory(key, value)
         except OSError as e:
-            sys.stderr.write(f"ERR: failed to load log file — {e}\n")
+            # Don’t crash; surface a clear error for quality review.
+            sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {e.strerror}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
         """
-        Insert or overwrite `(key, value)` in the in-memory list.
+        Insert or overwrite a (key, value) pair in the in-memory linear index.
 
         Parameters
         ----------
         key : str
-            The key to set.
+            Key to store (single token).
         value : str
-            The value to associate with the key.
+            Associated value (arbitrary UTF-8 text).
         """
-        for i, (existing_key, _) in enumerate(self.index):
-            if existing_key == key:
+        for i, (k, _) in enumerate(self.index):
+            if k == key:
                 self.index[i] = (key, value)
                 return
         self.index.append((key, value))
 
     def set(self, key: str, value: str) -> None:
         """
-        Persist and index a SET operation.
+        Persist and index a SET operation with flush + fsync for durability.
 
         Steps
         -----
-        1. Append a line "SET <key> <value>" to `data.db`.
-        2. Flush and fsync for durability.
-        3. Update the in-memory index.
+        1) Append "SET <key> <value>\\n" to `data.db`
+        2) Flush and fsync file descriptor
+        3) Update in-memory index
         """
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
         try:
-            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as file:
-                file.write(f"SET {safe_key} {safe_value}\n")
-                file.flush()
-                os.fsync(file.fileno())
+            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
+                f.write(f"SET {safe_key} {safe_value}\n")
+                f.flush()
+                os.fsync(f.fileno())
         except OSError as e:
-            sys.stderr.write(f"ERR: failed to write log file — {e}\n")
+            sys.stderr.write(f"ERR: failed to write {DATA_FILE} — {e.strerror}\n")
             return
         self._set_in_memory(safe_key, safe_value)
 
@@ -100,24 +100,26 @@ class KeyValueStore:
         """
         Retrieve the most recent value for a key.
 
-        Returns the latest value if the key exists, otherwise None.
+        Returns
+        -------
+        Optional[str] : the latest value if present; else None
         """
-        for stored_key, stored_value in self.index:
-            if stored_key == key:
-                return stored_value
+        for k, v in self.index:
+            if k == key:
+                return v
         return None
 
 
 # ───── CLI helpers ────────────────────────────────────────────────────────────
 
 def _write_line(text: str) -> None:
-    """Write a single line of text to STDOUT in UTF-8 and flush."""
+    """Write a single line to STDOUT in UTF-8 and flush."""
     sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
 
 def _err(msg: str) -> None:
-    """Write a normalized error message to STDOUT."""
+    """Write a normalized error line to STDOUT."""
     _write_line(f"ERR: {msg}")
 
 
@@ -125,7 +127,7 @@ def _parse_command(line: str) -> Tuple[str, List[str]]:
     """
     Parse a raw input line into (command, args).
 
-    Splits into at most 3 parts so that SET values can contain spaces.
+    Split into at most 3 parts so SET values can include spaces.
     """
     parts = line.strip().split(maxsplit=2)
     if not parts:
@@ -141,12 +143,13 @@ def _parse_command(line: str) -> Tuple[str, List[str]]:
 
 def main() -> None:
     """
-    Main CLI loop for the key-value store.
+    Main CLI loop.
 
-    Supports:
-      • SET <key> <value>
-      • GET <key>
-      • EXIT
+    Commands
+    --------
+    • SET <key> <value>
+    • GET <key>
+    • EXIT
     """
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -156,12 +159,12 @@ def main() -> None:
 
     store = KeyValueStore()
 
-    for line in sys.stdin:
-        clean_line = line.strip()
-        if not clean_line:
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
             continue
 
-        cmd, args = _parse_command(clean_line)
+        cmd, args = _parse_command(line)
         try:
             if cmd == "EXIT":
                 break
@@ -180,13 +183,12 @@ def main() -> None:
                 continue
             else:
                 raise KVError("unknown command (use SET/GET/EXIT)")
-                except KVError as e:
+        except KVError as e:
             _err(str(e))
         except OSError as e:
-            _err(f"ERR: file operation failed — {e.strerror}")
+            _err(f"file operation failed — {e.strerror}")
         except Exception as e:
-            _err(f"ERR: unexpected internal error — {type(e).__name__}")
-
+            _err(f"unexpected {type(e).__name__} — {str(e)}")
 
 
 if __name__ == "__main__":
