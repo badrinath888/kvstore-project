@@ -1,69 +1,73 @@
 #!/usr/bin/env python3
-# test_kv_store.py — Unit tests for KeyValueStore
+# Tests for KV Store Project 1
 # Course: CSCE 5350
 # Author: Badrinath | EUID: 11820168
 
 import os
-import unittest
-from kvstore import KeyValueStore, DATA_FILE, KVError
+import subprocess
+import tempfile
+import pytest
+
+KVSTORE = ["python3", "kvstore.py"]
 
 
-class TestKeyValueStore(unittest.TestCase):
-    def setUp(self) -> None:
-        # Clean slate before each test
-        if os.path.exists(DATA_FILE):
-            os.remove(DATA_FILE)
-        self.store = KeyValueStore()
-
-    def tearDown(self) -> None:
-        # Cleanup after each test
-        if os.path.exists(DATA_FILE):
-            os.remove(DATA_FILE)
-
-    def test_set_and_get(self):
-        """Basic SET and GET functionality."""
-        self.store.set("name", "Badrinath_11820168")
-        self.assertEqual(self.store.get("name"), "Badrinath_11820168")
-
-    def test_overwrite_key(self):
-        """Last write wins semantics: overwrite value for same key."""
-        self.store.set("course", "CSCE5300")
-        self.store.set("course", "CSCE5350")
-        self.assertEqual(self.store.get("course"), "CSCE5350")
-
-    def test_nonexistent_key(self):
-        """GET on a key that does not exist should return None."""
-        self.assertIsNone(self.store.get("does_not_exist"))
-
-    def test_persistence_after_restart(self):
-        """Values must survive restart (log replay)."""
-        self.store.set("key1", "value1")
-        # Simulate restart
-        new_store = KeyValueStore()
-        self.assertEqual(new_store.get("key1"), "value1")
-
-    def test_multiple_keys(self):
-        """Support multiple independent keys."""
-        self.store.set("a", "1")
-        self.store.set("b", "2")
-        self.store.set("c", "3")
-        self.assertEqual(self.store.get("a"), "1")
-        self.assertEqual(self.store.get("b"), "2")
-        self.assertEqual(self.store.get("c"), "3")
-
-    def test_empty_value(self):
-        """SET should handle empty string values gracefully."""
-        self.store.set("blank", "")
-        self.assertEqual(self.store.get("blank"), "")
-
-    def test_unicode_values(self):
-        """SET/GET must handle Unicode values correctly."""
-        self.store.set("greeting", "こんにちは")  # Japanese for Hello
-        self.assertEqual(self.store.get("greeting"), "こんにちは")
+def run_kvstore(commands):
+    """Helper: run kvstore.py with commands, capture stdout."""
+    process = subprocess.Popen(
+        KVSTORE,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout, _ = process.communicate("\n".join(commands) + "\n")
+    return stdout.strip().splitlines()
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_set_get(tmp_path):
+    os.chdir(tmp_path)
+    out = run_kvstore(["SET name Alice", "GET name", "EXIT"])
+    assert out == ["Alice"]
+
+
+def test_overwrite(tmp_path):
+    os.chdir(tmp_path)
+    out = run_kvstore(["SET name Alice", "SET name Bob", "GET name", "EXIT"])
+    assert out == ["Bob"]
+
+
+def test_nonexistent_get(tmp_path):
+    os.chdir(tmp_path)
+    out = run_kvstore(["GET missing", "EXIT"])
+    assert out == ["NULL"]
+
+
+def test_persistence(tmp_path):
+    os.chdir(tmp_path)
+    dbfile = tmp_path / "data.db"
+    run_kvstore(["SET course CSCE5350", "EXIT"])
+    assert dbfile.exists()
+    out = run_kvstore(["GET course", "EXIT"])
+    assert out == ["CSCE5350"]
+
+
+def test_blank_and_exit(tmp_path):
+    os.chdir(tmp_path)
+    out = run_kvstore(["", "EXIT"])
+    assert out == []  # blank line ignored
+
+
+def test_malformed_set(tmp_path):
+    os.chdir(tmp_path)
+    out = run_kvstore(["SET onlykey", "EXIT"])
+    assert out[0].startswith("ERR:")
+
+
+def test_get_extra_args(tmp_path):
+    os.chdir(tmp_path)
+    out = run_kvstore(["GET key extra", "EXIT"])
+    assert out[0].startswith("ERR:")
+
 
 
 
