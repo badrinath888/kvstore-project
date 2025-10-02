@@ -5,230 +5,133 @@
 
 import os
 import sys
-import fcntl
-from typing import Dict, List, Optional
-from contextlib import contextmanager
+from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
-LOCK_FILE = "data.db.lock"
 
 
 class KVError(Exception):
-    """Invalid CLI usage (wrong args or unknown command)."""
+    """Custom exception for invalid CLI usage (wrong args, unknown command)."""
     pass
-
-
-class KVStoreError(Exception):
-    """Internal key-value store error."""
-    pass
-
-
-@contextmanager
-def file_lock(lock_path: str):
-    """Context manager for file-based locking to prevent concurrent writes."""
-    lock_fd = None
-    try:
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY, 0o644)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        yield
-    except (OSError, IOError) as e:
-        raise KVStoreError(f"failed to acquire lock: {e}")
-    finally:
-        if lock_fd is not None:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                os.close(lock_fd)
-            except (OSError, IOError):
-                pass
 
 
 class KeyValueStore:
-    """Append-only persistent key-value store with last-write-wins semantics."""
+    """
+    Append-only persistent key-value store with a simple in-memory index.
+
+    Design
+    ------
+    • Data is logged in `data.db` with lines formatted as "SET <key> <value>".
+    • On startup, the log is replayed into an in-memory list of (key, value) pairs.
+    • The index uses **last-write-wins** semantics: the latest SET overwrites older values.
+    • No built-in dictionaries or maps are used (per assignment restriction).
+    """
 
     def __init__(self) -> None:
-        self.index: Dict[str, str] = {}
+        """Initialize store and rebuild index from log file."""
+        self.index: List[Tuple[str, str]] = []
         self.load_data()
 
     def load_data(self) -> None:
-        """Replay the log into memory; skip corrupted lines with warnings."""
+        """
+        Replay the append-only log into memory, last-write-wins.
+
+        Only valid "SET <key> <value>" lines are applied.
+        Handles file errors explicitly and skips corrupted lines safely.
+        """
         if not os.path.exists(DATA_FILE):
             return
-        
-        line_num = 0
-        corrupted_lines = 0
-        
         try:
-            with file_lock(LOCK_FILE):
-                with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
-                    for raw in f:
-                        line_num += 1
-                        try:
-                            parts = raw.strip().split(maxsplit=2)
-                            if len(parts) < 2:
-                                continue
-                            
-                            cmd = parts[0].upper()
-                            
-                            if cmd == "SET" and len(parts) == 3:
-                                _, key, value = parts
-                                self._set_in_memory(key, value)
-                            elif cmd == "DEL" and len(parts) == 2:
-                                _, key = parts
-                                self._delete_in_memory(key)
-                            else:
-                                corrupted_lines += 1
-                                sys.stderr.write(
-                                    f"WARN: line {line_num}: malformed command '{parts[0]}'\n"
-                                )
-                        except (ValueError, IndexError) as e:
-                            corrupted_lines += 1
-                            sys.stderr.write(
-                                f"WARN: line {line_num}: parse error - {e}\n"
-                            )
-                        except (UnicodeError, UnicodeDecodeError) as e:
-                            corrupted_lines += 1
-                            sys.stderr.write(
-                                f"WARN: line {line_num}: encoding error - {e}\n"
-                            )
-                        except MemoryError as e:
-                            sys.stderr.write(
-                                f"FATAL: line {line_num}: out of memory - {e}\n"
-                            )
-                            raise KVStoreError(f"insufficient memory to load data at line {line_num}")
-                        except (AttributeError, TypeError) as e:
-                            corrupted_lines += 1
-                            sys.stderr.write(
-                                f"WARN: line {line_num}: type error - {e}\n"
-                            )
-            
-            if corrupted_lines > 0:
-                sys.stderr.write(
-                    f"INFO: loaded {len(self.index)} keys, skipped {corrupted_lines} corrupted lines\n"
-                )
-                
+            with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as file:
+                for line in file:
+                    clean_line = line.strip()
+                    if not clean_line:
+                        continue
+                    parts = clean_line.split(maxsplit=2)
+                    if len(parts) == 3 and parts[0].upper() == "SET":
+                        _, key, value = parts
+                        self._set_in_memory(key, value)
+        except FileNotFoundError:
+            # File may be deleted between check and open
+            sys.stderr.write(f"Warning: {DATA_FILE} not found during load.\n")
+        except PermissionError:
+            sys.stderr.write(f"Error: permission denied reading {DATA_FILE}.\n")
         except OSError as e:
-            raise KVStoreError(f"cannot read {DATA_FILE}: {e}")
-        except KVStoreError:
-            raise
+            sys.stderr.write(f"Error: failed to read {DATA_FILE}: {e}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
-        """Insert or overwrite (key, value) in memory."""
-        self.index[key] = value
-
-    def _delete_in_memory(self, key: str) -> None:
-        """Remove a key from memory."""
-        self.index.pop(key, None)
-
-    def _validate_key(self, key: str) -> None:
-        """Ensure key doesn't contain problematic characters."""
-        if not key:
-            raise KVError("key cannot be empty")
-        if '\n' in key or '\r' in key:
-            raise KVError(f"key '{key}' contains newlines")
-        if ' ' in key or '\t' in key:
-            raise KVError(f"key '{key}' contains whitespace")
-
-    def _validate_value(self, value: str) -> None:
-        """Ensure value doesn't contain newlines."""
-        if '\n' in value or '\r' in value:
-            raise KVError("value cannot contain newlines")
+        """Insert or overwrite `(key, value)` in memory (linear search)."""
+        for i, (existing_key, _) in enumerate(self.index):
+            if existing_key == key:
+                self.index[i] = (key, value)
+                return
+        self.index.append((key, value))
 
     def set(self, key: str, value: str) -> None:
-        """Persist and store a key-value pair with file locking."""
-        self._validate_key(key)
-        self._validate_value(value)
-        
+        """
+        Persist and index a SET operation (append-only, durable).
+
+        Uses context manager for file safety.
+        Raises KVError if persistence fails.
+        """
+        safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
+        safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
         try:
-            with file_lock(LOCK_FILE):
-                with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
-                    f.write(f"SET {key} {value}\n")
-                    f.flush()
-                    os.fsync(f.fileno())
+            # context manager ensures proper close even on error
+            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as file:
+                file.write(f"SET {safe_key} {safe_value}\n")
+                file.flush()
+                os.fsync(file.fileno())
+            self._set_in_memory(safe_key, safe_value)
+        except PermissionError:
+            raise KVError(f"permission denied writing {DATA_FILE}")
         except OSError as e:
-            raise KVStoreError(f"failed to write SET to {DATA_FILE}: {e}")
-        except KVStoreError:
-            raise
-        
-        self._set_in_memory(key, value)
+            raise KVError(f"failed to persist key '{key}': {e}")
 
     def get(self, key: str) -> Optional[str]:
-        """Retrieve the most recent value for a key (O(1) lookup)."""
-        return self.index.get(key)
-
-    def delete(self, key: str) -> bool:
-        """Mark a key as deleted with file locking. Returns True if key existed."""
-        self._validate_key(key)
-        
-        existed = key in self.index
-        
-        try:
-            with file_lock(LOCK_FILE):
-                with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
-                    f.write(f"DEL {key}\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-        except OSError as e:
-            raise KVStoreError(f"failed to write DEL to {DATA_FILE}: {e}")
-        except KVStoreError:
-            raise
-        
-        self._delete_in_memory(key)
-        return existed
-
-    def list_keys(self) -> List[str]:
-        """Return all current keys sorted alphabetically."""
-        return sorted(self.index.keys())
-
-    def count(self) -> int:
-        """Return the total number of keys in the store."""
-        return len(self.index)
+        """Retrieve the most recent value for a key, or None if missing."""
+        for stored_key, stored_value in self.index:
+            if stored_key == key:
+                return stored_value
+        return None
 
 
-# ───── CLI ────────────────────────────────────────────────
+# ───── CLI helpers ────────────────────────────────────────────────
 
 def _write_line(text: str) -> None:
-    """Write a line to stdout with proper encoding."""
-    try:
-        sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
-        sys.stdout.flush()
-    except (OSError, IOError) as e:
-        sys.stderr.write(f"ERR: failed to write output: {e}\n")
+    """Write a single line to STDOUT (UTF-8, flushed)."""
+    sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
+    sys.stdout.flush()
 
 
 def _err(msg: str) -> None:
-    """Write an error message to stdout."""
+    """Write an error message in standardized format."""
     _write_line(f"ERR: {msg}")
 
 
-def _parse_command(line: str) -> tuple[str, List[str]]:
-    """Parse a command line into command and arguments."""
+def _parse_command(line: str) -> Tuple[str, List[str]]:
+    """Parse a raw input line into (command, args)."""
     parts = line.strip().split(maxsplit=2)
     if not parts:
         return "", []
-    
     cmd = parts[0].upper()
-    args: List[str] = parts[1:] if len(parts) > 1 else []
-    
+    args: List[str] = []
+    if len(parts) > 1:
+        args.append(parts[1])
+    if len(parts) > 2:
+        args.append(parts[2])
     return cmd, args
 
 
 def main() -> None:
-    """Main REPL loop for the key-value store."""
+    """Run the interactive CLI loop until EXIT is given."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
+    except Exception:
         pass
 
-    try:
-        store = KeyValueStore()
-    except KVStoreError as e:
-        _err(f"initialization failed: {e}")
-        sys.exit(1)
-    except Exception as e:
-        _err(f"unexpected initialization error: {type(e).__name__} - {e}")
-        sys.exit(1)
+    store = KeyValueStore()
 
     for raw in sys.stdin:
         line = raw.strip()
@@ -236,69 +139,36 @@ def main() -> None:
             continue
 
         cmd, args = _parse_command(line)
-        
         try:
             if cmd == "EXIT":
                 break
-                
             elif cmd == "SET":
                 if len(args) != 2:
-                    raise KVError("usage: SET <key> <value>")
+                    raise KVError("expected: SET <key> <value>")
                 key, value = args
                 store.set(key, value)
-                _write_line("OK")
-                
             elif cmd == "GET":
                 if len(args) != 1:
-                    raise KVError("usage: GET <key>")
+                    raise KVError("expected: GET <key>")
                 key = args[0]
                 value = store.get(key)
                 _write_line(value if value is not None else "NULL")
-                
-            elif cmd in ("DEL", "DELETE"):
-                if len(args) != 1:
-                    raise KVError("usage: DEL <key>")
-                key = args[0]
-                existed = store.delete(key)
-                _write_line("OK" if existed else "NULL")
-                
-            elif cmd in ("KEYS", "LIST"):
-                if args:
-                    raise KVError("usage: KEYS (no arguments)")
-                keys = store.list_keys()
-                if keys:
-                    for key in keys:
-                        _write_line(key)
-                else:
-                    _write_line("NULL")
-                    
-            elif cmd == "COUNT":
-                if args:
-                    raise KVError("usage: COUNT (no arguments)")
-                _write_line(str(store.count()))
-                
             elif cmd == "":
                 continue
-                
             else:
-                raise KVError(f"unknown command '{cmd}' (use SET/GET/DEL/KEYS/COUNT/EXIT)")
-                
+                raise KVError("unknown command (use SET/GET/EXIT)")
         except KVError as e:
-            _err(f"command error: {e}")
-        except KVStoreError as e:
-            _err(f"storage error: {e}")
+            _err(str(e))
         except OSError as e:
-            _err(f"system error: {e}")
+            _err(f"filesystem error: {e}")
         except Exception as e:
-            _err(f"unexpected error: {type(e).__name__} - {e}")
+            _err(f"unexpected internal error: {e}")
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        _write_line("\nExiting...")
-    except Exception as e:
-        sys.stderr.write(f"FATAL: {type(e).__name__} - {e}\n")
-        sys.exit(1)
+        pass
+
 
