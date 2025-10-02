@@ -5,14 +5,41 @@
 
 import os
 import sys
+import fcntl
 from typing import Dict, List, Optional
+from contextlib import contextmanager
 
 DATA_FILE = "data.db"
+LOCK_FILE = "data.db.lock"
 
 
 class KVError(Exception):
-    """Raised for invalid CLI usage (wrong args or unknown command)."""
+    """Invalid CLI usage (wrong args or unknown command)."""
     pass
+
+
+class KVStoreError(Exception):
+    """Internal key-value store error."""
+    pass
+
+
+@contextmanager
+def file_lock(lock_path: str):
+    """Context manager for file-based locking to prevent concurrent writes."""
+    lock_fd = None
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY, 0o644)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    except (OSError, IOError) as e:
+        raise KVStoreError(f"failed to acquire lock: {e}")
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            except (OSError, IOError):
+                pass
 
 
 class KeyValueStore:
@@ -23,36 +50,65 @@ class KeyValueStore:
         self.load_data()
 
     def load_data(self) -> None:
-        """Replay the log into memory; tolerate partial or corrupted lines."""
+        """Replay the log into memory; skip corrupted lines with warnings."""
         if not os.path.exists(DATA_FILE):
             return
         
         line_num = 0
+        corrupted_lines = 0
+        
         try:
-            with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
-                for raw in f:
-                    line_num += 1
-                    try:
-                        parts = raw.strip().split(maxsplit=2)
-                        if len(parts) < 2:
-                            continue
-                        
-                        cmd = parts[0].upper()
-                        
-                        if cmd == "SET" and len(parts) == 3:
-                            _, key, value = parts
-                            self._set_in_memory(key, value)
-                        elif cmd == "DEL" and len(parts) == 2:
-                            _, key = parts
-                            self._delete_in_memory(key)
-                        else:
-                            # Skip malformed lines
-                            sys.stderr.write(f"WARN: skipping malformed line {line_num}\n")
-                    except Exception as e:
-                        # Log corrupted line but continue loading other entries
-                        sys.stderr.write(f"WARN: skipping corrupted line {line_num}: {e}\n")
+            with file_lock(LOCK_FILE):
+                with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
+                    for raw in f:
+                        line_num += 1
+                        try:
+                            parts = raw.strip().split(maxsplit=2)
+                            if len(parts) < 2:
+                                continue
+                            
+                            cmd = parts[0].upper()
+                            
+                            if cmd == "SET" and len(parts) == 3:
+                                _, key, value = parts
+                                self._set_in_memory(key, value)
+                            elif cmd == "DEL" and len(parts) == 2:
+                                _, key = parts
+                                self._delete_in_memory(key)
+                            else:
+                                corrupted_lines += 1
+                                sys.stderr.write(
+                                    f"WARN: line {line_num}: malformed command '{parts[0]}'\n"
+                                )
+                        except (ValueError, IndexError) as e:
+                            corrupted_lines += 1
+                            sys.stderr.write(
+                                f"WARN: line {line_num}: parse error - {e}\n"
+                            )
+                        except (UnicodeError, UnicodeDecodeError) as e:
+                            corrupted_lines += 1
+                            sys.stderr.write(
+                                f"WARN: line {line_num}: encoding error - {e}\n"
+                            )
+                        except MemoryError as e:
+                            sys.stderr.write(
+                                f"FATAL: line {line_num}: out of memory - {e}\n"
+                            )
+                            raise KVStoreError(f"insufficient memory to load data at line {line_num}")
+                        except (AttributeError, TypeError) as e:
+                            corrupted_lines += 1
+                            sys.stderr.write(
+                                f"WARN: line {line_num}: type error - {e}\n"
+                            )
+            
+            if corrupted_lines > 0:
+                sys.stderr.write(
+                    f"INFO: loaded {len(self.index)} keys, skipped {corrupted_lines} corrupted lines\n"
+                )
+                
         except OSError as e:
-            sys.stderr.write(f"ERR: file read error ({e})\n")
+            raise KVStoreError(f"cannot read {DATA_FILE}: {e}")
+        except KVStoreError:
             raise
 
     def _set_in_memory(self, key: str, value: str) -> None:
@@ -64,67 +120,83 @@ class KeyValueStore:
         self.index.pop(key, None)
 
     def _validate_key(self, key: str) -> None:
-        """Validate that key doesn't contain problematic characters."""
+        """Ensure key doesn't contain problematic characters."""
         if not key:
             raise KVError("key cannot be empty")
         if '\n' in key or '\r' in key:
-            raise KVError("key cannot contain newlines")
+            raise KVError(f"key '{key}' contains newlines")
         if ' ' in key or '\t' in key:
-            raise KVError("key cannot contain spaces or tabs")
+            raise KVError(f"key '{key}' contains whitespace")
 
-    def set(self, key: str, value: str) -> None:
-        """Persist and store a key-value pair."""
-        self._validate_key(key)
-        
+    def _validate_value(self, value: str) -> None:
+        """Ensure value doesn't contain newlines."""
         if '\n' in value or '\r' in value:
             raise KVError("value cannot contain newlines")
+
+    def set(self, key: str, value: str) -> None:
+        """Persist and store a key-value pair with file locking."""
+        self._validate_key(key)
+        self._validate_value(value)
         
         try:
-            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
-                f.write(f"SET {key} {value}\n")
-                f.flush()
-                os.fsync(f.fileno())
+            with file_lock(LOCK_FILE):
+                with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
+                    f.write(f"SET {key} {value}\n")
+                    f.flush()
+                    os.fsync(f.fileno())
         except OSError as e:
-            raise KVError(f"could not write to data.db ({e})")
+            raise KVStoreError(f"failed to write SET to {DATA_FILE}: {e}")
+        except KVStoreError:
+            raise
         
         self._set_in_memory(key, value)
 
     def get(self, key: str) -> Optional[str]:
-        """Retrieve the most recent value for a key."""
+        """Retrieve the most recent value for a key (O(1) lookup)."""
         return self.index.get(key)
 
     def delete(self, key: str) -> bool:
-        """Mark a key as deleted. Returns True if key existed."""
+        """Mark a key as deleted with file locking. Returns True if key existed."""
         self._validate_key(key)
         
         existed = key in self.index
         
         try:
-            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
-                f.write(f"DEL {key}\n")
-                f.flush()
-                os.fsync(f.fileno())
+            with file_lock(LOCK_FILE):
+                with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
+                    f.write(f"DEL {key}\n")
+                    f.flush()
+                    os.fsync(f.fileno())
         except OSError as e:
-            raise KVError(f"could not write to data.db ({e})")
+            raise KVStoreError(f"failed to write DEL to {DATA_FILE}: {e}")
+        except KVStoreError:
+            raise
         
         self._delete_in_memory(key)
         return existed
 
     def list_keys(self) -> List[str]:
-        """Return all current keys in the store."""
+        """Return all current keys sorted alphabetically."""
         return sorted(self.index.keys())
+
+    def count(self) -> int:
+        """Return the total number of keys in the store."""
+        return len(self.index)
 
 
 # ───── CLI ────────────────────────────────────────────────
 
 def _write_line(text: str) -> None:
     """Write a line to stdout with proper encoding."""
-    sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
-    sys.stdout.flush()
+    try:
+        sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
+        sys.stdout.flush()
+    except (OSError, IOError) as e:
+        sys.stderr.write(f"ERR: failed to write output: {e}\n")
 
 
 def _err(msg: str) -> None:
-    """Write an error message."""
+    """Write an error message to stdout."""
     _write_line(f"ERR: {msg}")
 
 
@@ -135,12 +207,7 @@ def _parse_command(line: str) -> tuple[str, List[str]]:
         return "", []
     
     cmd = parts[0].upper()
-    args: List[str] = []
-    
-    if len(parts) > 1:
-        args.append(parts[1])
-    if len(parts) > 2:
-        args.append(parts[2])
+    args: List[str] = parts[1:] if len(parts) > 1 else []
     
     return cmd, args
 
@@ -152,13 +219,15 @@ def main() -> None:
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, OSError):
-        # Ignore if not supported
         pass
 
     try:
         store = KeyValueStore()
-    except OSError as e:
-        _err(f"failed to initialize store: {e}")
+    except KVStoreError as e:
+        _err(f"initialization failed: {e}")
+        sys.exit(1)
+    except Exception as e:
+        _err(f"unexpected initialization error: {type(e).__name__} - {e}")
         sys.exit(1)
 
     for raw in sys.stdin:
@@ -167,42 +236,59 @@ def main() -> None:
             continue
 
         cmd, args = _parse_command(line)
+        
         try:
             if cmd == "EXIT":
                 break
+                
             elif cmd == "SET":
                 if len(args) != 2:
-                    raise KVError("expected: SET <key> <value>")
+                    raise KVError("usage: SET <key> <value>")
                 key, value = args
                 store.set(key, value)
                 _write_line("OK")
+                
             elif cmd == "GET":
                 if len(args) != 1:
-                    raise KVError("expected: GET <key>")
+                    raise KVError("usage: GET <key>")
                 key = args[0]
                 value = store.get(key)
                 _write_line(value if value is not None else "NULL")
-            elif cmd == "DEL" or cmd == "DELETE":
+                
+            elif cmd in ("DEL", "DELETE"):
                 if len(args) != 1:
-                    raise KVError("expected: DEL <key>")
+                    raise KVError("usage: DEL <key>")
                 key = args[0]
                 existed = store.delete(key)
                 _write_line("OK" if existed else "NULL")
-            elif cmd == "KEYS" or cmd == "LIST":
+                
+            elif cmd in ("KEYS", "LIST"):
+                if args:
+                    raise KVError("usage: KEYS (no arguments)")
                 keys = store.list_keys()
                 if keys:
                     for key in keys:
                         _write_line(key)
                 else:
                     _write_line("NULL")
+                    
+            elif cmd == "COUNT":
+                if args:
+                    raise KVError("usage: COUNT (no arguments)")
+                _write_line(str(store.count()))
+                
             elif cmd == "":
                 continue
+                
             else:
-                raise KVError("unknown command (use SET/GET/DEL/KEYS/EXIT)")
+                raise KVError(f"unknown command '{cmd}' (use SET/GET/DEL/KEYS/COUNT/EXIT)")
+                
         except KVError as e:
-            _err(str(e))
+            _err(f"command error: {e}")
+        except KVStoreError as e:
+            _err(f"storage error: {e}")
         except OSError as e:
-            _err(f"file system error: {e}")
+            _err(f"system error: {e}")
         except Exception as e:
             _err(f"unexpected error: {type(e).__name__} - {e}")
 
@@ -213,6 +299,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         _write_line("\nExiting...")
     except Exception as e:
-        _err(f"fatal error: {type(e).__name__} - {e}")
+        sys.stderr.write(f"FATAL: {type(e).__name__} - {e}\n")
         sys.exit(1)
 
