@@ -9,7 +9,6 @@ from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
 
-
 class KVError(Exception):
     """Custom exception for invalid CLI usage (wrong args, unknown command)."""
     pass
@@ -19,24 +18,29 @@ class KeyValueStore:
     """
     Append-only persistent key-value store with a simple in-memory index.
 
-    • Log lines are stored in `data.db` in the format: "SET <key> <value>"
+    • Log lines: "SET <key> <value>" in data.db (append-only)
     • Replay log on startup to rebuild index
-    • Last-write-wins; implemented without Python dicts (assignment rule)
+    • Last-write-wins; no built-in dict/map (assignment rule)
     """
 
     def __init__(self) -> None:
-        """Initialize the key-value store and rebuild index from log file."""
+        """
+        Initialize the key-value store.
+
+        Loads existing data from the append-only log file (`data.db`)
+        into memory to rebuild the index.
+        """
         self.index: List[Tuple[str, str]] = []
         self.load_data()
 
     def load_data(self) -> None:
         """
-        Replay the append-only log file into memory.
+        Replay the append-only log into memory.
 
-        Skips malformed lines and ensures store consistency.
+        Skips malformed lines that do not follow the "SET <key> <value>" format.
 
         Raises:
-            OSError: If the log file cannot be opened.
+            OSError: If reading the log file fails.
         """
         if not os.path.exists(DATA_FILE):
             return
@@ -54,7 +58,13 @@ class KeyValueStore:
             sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {e.strerror}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
-        """Update the in-memory index with the latest key-value pair."""
+        """
+        Update the in-memory index with the latest key-value pair.
+
+        Args:
+            key (str): The key to update.
+            value (str): The value associated with the key.
+        """
         for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
@@ -63,11 +73,14 @@ class KeyValueStore:
 
     def set(self, key: str, value: str) -> None:
         """
-        Append a key-value pair to the log file and update in-memory index.
+        Store a new key-value pair in the database.
+
+        This appends the entry to the log file and updates the in-memory
+        index. If the key already exists, its value is overwritten.
 
         Args:
             key (str): The key to store.
-            value (str): The value to associate with the key.
+            value (str): The value associated with the key.
 
         Raises:
             OSError: If writing to the log file fails.
@@ -89,10 +102,11 @@ class KeyValueStore:
         Retrieve the value associated with a given key.
 
         Args:
-            key (str): The key to look up.
+            key (str): The key to look up in the store.
 
         Returns:
-            Optional[str]: The most recent value for the key if it exists, else None.
+            Optional[str]: The most recent value for the key if it exists,
+            otherwise None.
         """
         for k, v in self.index:
             if k == key:
@@ -103,25 +117,28 @@ class KeyValueStore:
 # ---- CLI helpers -------------------------------------------------------------
 
 def _write_line(text: str) -> None:
-    """Write a line to stdout using UTF-8 encoding."""
+    """
+    Write a line of text to stdout in UTF-8 encoding.
+
+    Args:
+        text (str): The line of text to output.
+    """
     sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
-
 def _err(msg: str) -> None:
-    """Write an error message to stdout with ERR prefix."""
+    """Output a formatted error message."""
     _write_line(f"ERR: {msg}")
-
 
 def _parse_command(line: str) -> Tuple[str, List[str]]:
     """
-    Parse a command line into a command and arguments.
+    Parse a command line into a command and argument list.
 
     Args:
-        line (str): Raw input line.
+        line (str): The raw input line.
 
     Returns:
-        Tuple[str, List[str]]: The command (uppercase) and list of arguments.
+        Tuple[str, List[str]]: The command (uppercase) and its arguments.
     """
     tokens = line.strip().split(maxsplit=2)
     if not tokens:
@@ -134,16 +151,8 @@ def _parse_command(line: str) -> Tuple[str, List[str]]:
         args.append(tokens[2])
     return cmd, args
 
-
 def main() -> None:
-    """
-    Run the interactive CLI for the KeyValueStore.
-
-    Commands:
-        SET <key> <value>  → store a value
-        GET <key>          → retrieve a value
-        EXIT               → quit program
-    """
+    """Main CLI loop for processing SET/GET/EXIT commands."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -152,8 +161,8 @@ def main() -> None:
 
     store = KeyValueStore()
 
-    for line_raw in sys.stdin:
-        line = line_raw.strip()
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
         if not line:
             continue
         cmd, args = _parse_command(line)
@@ -182,13 +191,8 @@ def main() -> None:
         except Exception as e:
             _err(f"unexpected {type(e).__name__} — {str(e)}")
 
-
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         pass
-
-
-
-
