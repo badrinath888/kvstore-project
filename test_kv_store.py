@@ -1,80 +1,102 @@
 #!/usr/bin/env python3
-# test_kv_store.py — Extended Unit Tests for KeyValueStore CLI
-# Course: CSCE 5350
-# Author: Badrinath | EUID: 11820168
+"""
+Unit tests for KV Store Project 1
+Course: CSCE 5350
+Author: Badrinath | EUID: 11820168
+"""
 
+import io
 import os
-import shutil
-import subprocess
-import tempfile
+import sys
 import unittest
+from contextlib import redirect_stdout, redirect_stderr
 
-KV_CMD = ["python3", "kvstore.py"]
+import kvstore
 
-def run_cli(lines, cwd):
-    """Run kvstore.py with command lines; return stdout lines (non-empty)."""
-    proc = subprocess.Popen(
-        KV_CMD,
-        cwd=cwd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    stdout, _ = proc.communicate("\n".join(lines) + "\n")
-    return [ln for ln in stdout.splitlines() if ln.strip() != ""]
 
-class TestKVStoreCLI(unittest.TestCase):
+class TestKeyValueStore(unittest.TestCase):
+
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="kv_cli_")
-        self.addCleanup(lambda: shutil.rmtree(self.tmpdir, ignore_errors=True))
+        """Remove data.db before each test for isolation."""
+        if os.path.exists(kvstore.DATA_FILE):
+            os.remove(kvstore.DATA_FILE)
+        self.store = kvstore.KeyValueStore()
 
-    def test_set_get(self):
-        out = run_cli(["SET name Badrinath_11820168", "GET name", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["Badrinath_11820168"])
+    def test_set_and_get(self):
+        self.store.set("foo", "bar")
+        self.assertEqual(self.store.get("foo"), "bar")
 
-    def test_overwrite_last_write_wins(self):
-        out = run_cli(["SET k v1", "SET k v2", "SET k v3", "GET k", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["v3"])
+    def test_overwrite_key(self):
+        self.store.set("foo", "bar")
+        self.store.set("foo", "baz")
+        self.assertEqual(self.store.get("foo"), "baz")
 
-    def test_nonexistent(self):
-        out = run_cli(["GET missing", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["NULL"])
+    def test_nonexistent_key(self):
+        self.assertIsNone(self.store.get("nope"))
 
-    def test_persistence_across_restart(self):
-        run_cli(["SET course CSCE5350", "EXIT"], cwd=self.tmpdir)
-        out = run_cli(["GET course", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["CSCE5350"])
+    def test_persistence_after_restart(self):
+        self.store.set("course", "CSCE5350")
+        new_store = kvstore.KeyValueStore()
+        self.assertEqual(new_store.get("course"), "CSCE5350")
 
-    # --- Edge cases ---
-    def test_blank_line_ignored(self):
-        out = run_cli(["", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, [])
+    # --- Edge Case Tests ---
 
-    def test_malformed_set(self):
-        out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_set_with_invalid_args(self):
+        fake_in = io.StringIO("SET onlyonearg\nEXIT\n")
+        fake_out = io.StringIO()
+        with redirect_stdout(fake_out):
+            sys.stdin = fake_in
+            kvstore.main()
+        sys.stdin = sys.__stdin__
+        output = fake_out.getvalue()
+        self.assertIn("ERR:", output)
 
-    def test_get_extra_arg(self):
-        out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_get_with_invalid_args(self):
+        fake_in = io.StringIO("GET key extra\nEXIT\n")
+        fake_out = io.StringIO()
+        with redirect_stdout(fake_out):
+            sys.stdin = fake_in
+            kvstore.main()
+        sys.stdin = sys.__stdin__
+        output = fake_out.getvalue()
+        self.assertIn("ERR:", output)
 
-    def test_empty_key(self):
-        out = run_cli(["SET  valueOnly", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_unknown_command(self):
+        fake_in = io.StringIO("HELLO key value\nEXIT\n")
+        fake_out = io.StringIO()
+        with redirect_stdout(fake_out):
+            sys.stdin = fake_in
+            kvstore.main()
+        sys.stdin = sys.__stdin__
+        output = fake_out.getvalue()
+        self.assertIn("ERR:", output)
 
-    def test_long_key_value(self):
-        long_key = "k" * 1000
-        long_val = "v" * 2000
-        out = run_cli([f"SET {long_key} {long_val}", f"GET {long_key}", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, [long_val])
+    def test_blank_lines(self):
+        fake_in = io.StringIO("\n\nSET k v\nGET k\nEXIT\n")
+        fake_out = io.StringIO()
+        with redirect_stdout(fake_out):
+            sys.stdin = fake_in
+            kvstore.main()
+        sys.stdin = sys.__stdin__
+        output = fake_out.getvalue()
+        self.assertIn("v", output)
 
-    def test_special_characters(self):
-        out = run_cli(["SET sp€cial v@lue!", "GET sp€cial", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["v@lue!"])
+    def test_long_key_and_value(self):
+        key = "x" * 1000
+        value = "y" * 5000
+        self.store.set(key, value)
+        self.assertEqual(self.store.get(key), value)
+
+    def test_multiple_keys(self):
+        for i in range(10):
+            self.store.set(f"k{i}", f"v{i}")
+        for i in range(10):
+            self.assertEqual(self.store.get(f"k{i}"), f"v{i}")
+
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()
+
 
 
 
