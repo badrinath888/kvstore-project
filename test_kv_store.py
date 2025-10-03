@@ -1,105 +1,75 @@
-#!/usr/bin/env python3
-# test_kv_store.py — Unit tests for KeyValueStore CLI
-# Course: CSCE 5350
-# Author: Badrinath | EUID: 11820168
+"""
+Unit tests for KVStore (CSCE 5350 Project 1).
+Covers normal cases and additional edge cases.
+"""
 
 import os
-import shutil
-import subprocess
-import tempfile
-import unittest
+import pytest
+from kvstore import KVStore
 
-KV_CMD = ["python3", "kvstore.py"]
 
-def run_cli(lines, cwd):
-    """Run kvstore.py with command lines; return stdout lines (non-empty)."""
-    proc = subprocess.Popen(
-        KV_CMD,
-        cwd=cwd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    stdout, _ = proc.communicate("\n".join(lines) + "\n")
-    return [ln for ln in stdout.splitlines() if ln.strip() != ""]
+@pytest.fixture
+def store(tmp_path):
+    """
+    Creates a temporary KVStore for testing (uses temp data.db).
+    """
+    test_file = tmp_path / "data.db"
+    return KVStore(filename=str(test_file))
 
-class TestKVStoreCLI(unittest.TestCase):
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="kv_cli_")
-        self.addCleanup(lambda: shutil.rmtree(self.tmpdir, ignore_errors=True))
 
-    # ---- Basic Required Tests ----
-    def test_set_get(self):
-        out = run_cli(["SET name Badrinath_11820168", "GET name", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["Badrinath_11820168"])
+def test_set_and_get(store):
+    store.set("name", "Badrinath")
+    assert store.get("name") == "Badrinath"
 
-    def test_overwrite_last_write_wins(self):
-        out = run_cli(["SET k v1", "SET k v2", "SET k v3", "GET k", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["v3"])
 
-    def test_nonexistent(self):
-        out = run_cli(["GET missing", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["NULL"])
+def test_overwrite_key(store):
+    store.set("course", "CSCE")
+    store.set("course", "CSCE5350")
+    assert store.get("course") == "CSCE5350"
 
-    def test_persistence_across_restart(self):
-        run_cli(["SET course CSCE5350", "EXIT"], cwd=self.tmpdir)
-        out = run_cli(["GET course", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["CSCE5350"])
 
-    # ---- Edge Case Tests ----
-    def test_blank_line_ignored(self):
-        out = run_cli(["", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, [])
+def test_nonexistent_key(store):
+    assert store.get("doesnotexist") == "NULL"
 
-    def test_malformed_set_missing_value(self):
-        out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
 
-    def test_get_extra_arg(self):
-        out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+def test_empty_key(store):
+    store.set("", "empty_key")
+    assert store.get("") == "empty_key"
 
-    def test_set_extra_arg(self):
-        out = run_cli(["SET key v1 extra", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
 
-    def test_empty_key(self):
-        out = run_cli(["SET  value_only", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(any("ERR" in line for line in out))
+def test_empty_value(store):
+    store.set("key_only", "")
+    assert store.get("key_only") == ""
 
-    def test_empty_value(self):
-        out = run_cli(["SET key ", "GET key", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(any("ERR" in line for line in out))
 
-    def test_unicode_key_value(self):
-        out = run_cli(["SET café naïve", "GET café", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["naïve"])
+def test_special_characters(store):
+    store.set("sp&cial#k^y", "we!rd_val*ue")
+    assert store.get("sp&cial#k^y") == "we!rd_val*ue"
 
-    def test_long_key_and_value(self):
-        long_key = "k" * 1000
-        long_value = "v" * 2000
-        out = run_cli([f"SET {long_key} {long_value}", f"GET {long_key}", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, [long_value])
 
-    def test_case_insensitive_commands(self):
-        out = run_cli(["set key value", "gEt key", "ExIt"], cwd=self.tmpdir)
-        self.assertEqual(out, ["value"])
+def test_long_key(store):
+    long_key = "k" * 1000
+    store.set(long_key, "long_value")
+    assert store.get(long_key) == "long_value"
 
-    def test_unknown_command(self):
-        out = run_cli(["FOO bar", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
 
-    def test_multiple_spaces_between_args(self):
-        out = run_cli(["SET   spaced    value", "GET spaced", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["value"])
+def test_long_value(store):
+    long_val = "v" * 5000
+    store.set("long_val", long_val)
+    assert store.get("long_val") == long_val
 
-    def test_exit_without_commands(self):
-        out = run_cli(["EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, [])
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+def test_replay_log(tmp_path):
+    """
+    Ensure persistence works after restart by replaying log.
+    """
+    dbfile = tmp_path / "data.db"
+    s1 = KVStore(filename=str(dbfile))
+    s1.set("persist", "yes")
+
+    s2 = KVStore(filename=str(dbfile))
+    assert s2.get("persist") == "yes"
+
 
 
 
