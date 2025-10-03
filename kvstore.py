@@ -1,100 +1,64 @@
 #!/usr/bin/env python3
-"""
-CSCE 5350 — Project 1: Simple Append-Only Key-Value Store
-Author: Badrinath
-EUID: 11820168
-
-A persistent key-value store with:
-- SET <key> <value>
-- GET <key>
-- EXIT
-
-Data is stored in an append-only log (data.db). On startup, the store replays
-the log to rebuild the in-memory index. Implements last-write-wins semantics.
-"""
+# KV Store Project 1 — Simple Append-Only Key-Value Store
+# Course: CSCE 5350
+# Author: Badrinath | EUID: 11820168
 
 import os
 import sys
 import logging
-from logging.handlers import RotatingFileHandler
-from typing import Optional, List, Tuple
-
+from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
-LOG_FILE = "kvstore.log"
 
-# ---------------- Logging Setup ----------------
-logger = logging.getLogger("kvstore")
-logger.setLevel(logging.DEBUG)
+# --- Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("kvstore.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stderr)
+    ]
+)
 
-_handler = RotatingFileHandler(LOG_FILE, maxBytes=1_000_000, backupCount=3)
-_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-_handler.setFormatter(_formatter)
-logger.addHandler(_handler)
-
-_console = logging.StreamHandler()
-_console.setFormatter(_formatter)
-logger.addHandler(_console)
-
-
-# ---------------- Custom Exception ----------------
 class KVError(Exception):
-    """Custom exception for errors in the key-value store."""
+    """Custom exception for invalid CLI usage or store errors."""
     pass
 
 
-# ---------------- KV Store ----------------
-class KVStore:
+class KeyValueStore:
     """
-    A simple append-only key-value store.
+    Append-only persistent key-value store with a simple in-memory index.
 
-    Attributes:
-        data_file (str): Path to the data file.
-        index (List[Tuple[str, str]]): In-memory key-value pairs.
+    • Log lines: "SET <key> <value>" in data.db (append-only)
+    • Replay log on startup to rebuild index
+    • Last-write-wins; no built-in dict/map (assignment rule)
     """
 
-    def __init__(self, data_file: str = DATA_FILE) -> None:
-        """
-        Initialize the store and load existing data.
-
-        Args:
-            data_file (str): Path to the append-only log file.
-        """
-        self.data_file = data_file
+    def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        logger.info("Starting KVStore with data file=%s", self.data_file)
-        self._load()
+        self.load_data()
 
-    def _load(self) -> None:
-        """
-        Load data from the append-only log file into memory.
-
-        Raises:
-            KVError: If the file cannot be read or decoded.
-        """
-        if not os.path.exists(self.data_file):
-            logger.info("Data file %s not found. Starting fresh.", self.data_file)
+    def load_data(self) -> None:
+        """Replay the append-only log into memory; skip malformed lines."""
+        if not os.path.exists(DATA_FILE):
+            logging.info("No existing data file found, starting fresh.")
             return
         try:
-            with open(self.data_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    parts = line.strip().split(" ", 2)
-                    if len(parts) == 3 and parts[0] == "SET":
+            with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
+                for line_no, raw in enumerate(f, start=1):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    parts = line.split(maxsplit=2)
+                    if len(parts) == 3 and parts[0].upper() == "SET":
                         _, key, value = parts
-                        self._set_index(key, value)
-            logger.info("Loaded %d entries from %s", len(self.index), self.data_file)
-        except (OSError, UnicodeDecodeError) as e:
-            logger.exception("Failed to load %s", self.data_file)
-            raise KVError(f"Error loading {self.data_file}") from e
+                        self._set_in_memory(key, value)
+                    else:
+                        logging.warning(f"Skipped malformed line {line_no}: {raw.strip()}")
+        except OSError as e:
+            logging.error(f"Failed to load {DATA_FILE}: {e.strerror}")
 
-    def _set_index(self, key: str, value: str) -> None:
-        """
-        Update or insert a key-value pair in memory.
-
-        Args:
-            key (str): The key to insert/update.
-            value (str): The associated value.
-        """
+    def _set_in_memory(self, key: str, value: str) -> None:
         for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
@@ -102,108 +66,110 @@ class KVStore:
         self.index.append((key, value))
 
     def set(self, key: str, value: str) -> None:
-        """
-        Persist a key-value pair and update memory.
+        """Append to log (flush+fsync) then update in-memory index."""
+        if not key:
+            raise KVError("Key cannot be empty.")
+        if value is None:
+            raise KVError("Value cannot be None.")
 
-        Args:
-            key (str): Key string.
-            value (str): Value string.
+        safe_key = key.strip()
+        safe_value = value.strip()
 
-        Raises:
-            KVError: If writing to the file fails.
-        """
         try:
-            with open(self.data_file, "a", encoding="utf-8") as f:
-                f.write(f"SET {key} {value}\n")
+            with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
+                f.write(f"SET {safe_key} {safe_value}\n")
                 f.flush()
                 os.fsync(f.fileno())
-            self._set_index(key, value)
-            logger.debug("SET key=%s value=%s", key, value)
+            logging.info(f"SET command successful: {safe_key} -> {safe_value}")
         except OSError as e:
-            logger.exception("Failed to persist key=%s", key)
-            raise KVError(f"Unable to set key '{key}' due to I/O error.") from e
+            logging.error(f"Failed to write {DATA_FILE}: {e.strerror}")
+            raise KVError(f"File write failed: {e.strerror}")
+
+        self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
-        """
-        Retrieve the latest value for a key.
-
-        Args:
-            key (str): Key string.
-
-        Returns:
-            Optional[str]: Value if found, otherwise None.
-        """
-        for k, v in reversed(self.index):
+        if not key:
+            raise KVError("Key cannot be empty.")
+        for k, v in self.index:
             if k == key:
-                logger.debug("GET key=%s -> value=%s", key, v)
+                logging.info(f"GET command: {key} -> {v}")
                 return v
-        logger.debug("GET key=%s -> NOT FOUND", key)
+        logging.info(f"GET command: {key} not found")
         return None
 
 
-# ---------------- CLI ----------------
-def _write_out(msg: str) -> None:
-    """Print to STDOUT safely."""
-    sys.stdout.write(msg + "\n")
+# ---- CLI helpers -------------------------------------------------------------
+
+def _write_line(text: str) -> None:
+    """Write output to stdout (UTF-8 safe)."""
+    sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
+def _err(msg: str) -> None:
+    """Write error to stdout and log it."""
+    logging.error(msg)
+    _write_line(f"ERR: {msg}")
 
-def _write_err(msg: str) -> None:
-    """Print error to STDERR safely."""
-    sys.stderr.write("ERR: " + msg + "\n")
-    sys.stderr.flush()
+def _parse_command(line: str) -> Tuple[str, List[str]]:
+    parts = line.strip().split(maxsplit=2)
+    if not parts:
+        return "", []
+    cmd = parts[0].upper()
+    args: List[str] = []
+    if len(parts) > 1:
+        args.append(parts[1])
+    if len(parts) > 2:
+        args.append(parts[2])
+    return cmd, args
 
 
 def main() -> None:
-    """
-    Command-line interface loop.
-    Handles SET, GET, and EXIT commands from STDIN.
-    """
-    store = KVStore()
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
-    while True:
+    store = KeyValueStore()
+
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        cmd, args = _parse_command(line)
         try:
-            line = sys.stdin.readline()
-            if not line:  # EOF
-                logger.info("EOF reached, exiting.")
-                break
-
-            parts = line.strip().split(" ", 2)
-            if not parts or parts[0] == "":
-                continue
-
-            cmd = parts[0].upper()
-
             if cmd == "EXIT":
-                logger.info("EXIT command received.")
+                logging.info("Received EXIT command. Shutting down.")
                 break
             elif cmd == "SET":
-                if len(parts) != 3:
-                    _write_err("Invalid SET syntax. Usage: SET <key> <value>")
-                    continue
-                key, value = parts[1], parts[2]
+                if len(args) != 2:
+                    raise KVError("Usage: SET <key> <value>")
+                key, value = args
                 store.set(key, value)
             elif cmd == "GET":
-                if len(parts) != 2:
-                    _write_err("Invalid GET syntax. Usage: GET <key>")
-                    continue
-                key = parts[1]
+                if len(args) != 1:
+                    raise KVError("Usage: GET <key>")
+                key = args[0]
                 value = store.get(key)
-                _write_out(value if value is not None else "NULL")
+                _write_line(value if value is not None else "NULL")
+            elif cmd == "":
+                continue
             else:
-                _write_err(f"Unknown command: {cmd}. Valid commands: SET, GET, EXIT.")
-                logger.warning("Unknown command received: %s", cmd)
-
+                raise KVError(f"Unknown command: {cmd}. Use SET/GET/EXIT.")
         except KVError as e:
-            _write_err(str(e))
-            logger.error("KVError: %s", e)
+            _err(str(e))
         except Exception as e:
-            _write_err("Unexpected internal error occurred. Please try again.")
-            logger.exception("Unhandled exception in CLI loop: %s", e)
+            logging.exception("Unexpected error")
+            _err(f"Unexpected {type(e).__name__}: {str(e)}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logging.info("Interrupted by user, exiting.")
+        pass
+
 
 
 
