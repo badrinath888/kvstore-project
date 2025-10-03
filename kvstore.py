@@ -8,8 +8,6 @@ import sys
 from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
-MAX_KEY_LENGTH = 100
-MAX_VALUE_LENGTH = 1000
 
 class KVError(Exception):
     """Custom exception for invalid CLI usage (wrong args, unknown command)."""
@@ -26,7 +24,6 @@ class KeyValueStore:
     """
 
     def __init__(self) -> None:
-        """Initialize the store by loading persisted data."""
         self.index: List[Tuple[str, str]] = []
         self.load_data()
 
@@ -45,10 +42,10 @@ class KeyValueStore:
                         _, key, value = parts
                         self._set_in_memory(key, value)
         except OSError as e:
-            sys.stderr.write(f"ERR: Failed to load {DATA_FILE} — {e.strerror}\n")
+            sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {e.strerror}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
-        """Insert or update the in-memory key-value index."""
+        """Helper: update or insert key-value pair in in-memory index."""
         for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
@@ -57,6 +54,11 @@ class KeyValueStore:
 
     def set(self, key: str, value: str) -> None:
         """Append to log (flush+fsync) then update in-memory index."""
+        if not key:
+            raise KVError("Key cannot be empty")
+        if value is None or value == "":
+            raise KVError("Value cannot be empty")
+
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
         try:
@@ -65,12 +67,14 @@ class KeyValueStore:
                 f.flush()
                 os.fsync(f.fileno())
         except OSError as e:
-            sys.stderr.write(f"ERR: Failed to write {DATA_FILE} — {e.strerror}\n")
+            sys.stderr.write(f"ERR: failed to write {DATA_FILE} — {e.strerror}\n")
             return
         self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
-        """Retrieve the value for a key, or None if not found."""
+        """Return the latest value for a key, or None if not found."""
+        if not key:
+            raise KVError("Key cannot be empty")
         for k, v in self.index:
             if k == key:
                 return v
@@ -80,16 +84,13 @@ class KeyValueStore:
 # ---- CLI helpers -------------------------------------------------------------
 
 def _write_line(text: str) -> None:
-    """Write a UTF-8 safe line to STDOUT."""
     sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
 def _err(msg: str) -> None:
-    """Write an error message to STDOUT (Gradebot expects ERR prefix)."""
     _write_line(f"ERR: {msg}")
 
 def _parse_command(line: str) -> Tuple[str, List[str]]:
-    """Split a CLI command into command and arguments."""
     parts = line.strip().split(maxsplit=2)
     if not parts:
         return "", []
@@ -102,10 +103,8 @@ def _parse_command(line: str) -> Tuple[str, List[str]]:
     return cmd, args
 
 
-# ---- CLI main loop -----------------------------------------------------------
-
 def main() -> None:
-    """Main REPL loop for the key-value store."""
+    """Main CLI loop: reads commands and executes them."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -118,47 +117,26 @@ def main() -> None:
         line = raw.strip()
         if not line:
             continue
-
         cmd, args = _parse_command(line)
-
         try:
             if cmd == "EXIT":
                 break
             elif cmd == "SET":
                 if len(args) != 2:
-                    _err("Invalid SET — usage: SET <key> <value>")
-                    continue
+                    raise KVError("Usage: SET <key> <value>")
                 key, value = args
-                if not key.strip():
-                    _err("Invalid SET — key cannot be empty or whitespace")
-                    continue
-                if len(key) > MAX_KEY_LENGTH:
-                    _err(f"Invalid SET — key too long (> {MAX_KEY_LENGTH} chars)")
-                    continue
-                if not value.strip():
-                    _err("Invalid SET — value cannot be empty or whitespace")
-                    continue
-                if len(value) > MAX_VALUE_LENGTH:
-                    _err(f"Invalid SET — value too long (> {MAX_VALUE_LENGTH} chars)")
-                    continue
-                store.set(key.strip(), value)
+                store.set(key, value)
+                _write_line(f"OK: key '{key}' set successfully")
             elif cmd == "GET":
                 if len(args) != 1:
-                    _err("Invalid GET — usage: GET <key>")
-                    continue
-                key = args[0].strip()
-                if not key:
-                    _err("Invalid GET — key cannot be empty or whitespace")
-                    continue
-                if len(key) > MAX_KEY_LENGTH:
-                    _err(f"Invalid GET — key too long (> {MAX_KEY_LENGTH} chars)")
-                    continue
+                    raise KVError("Usage: GET <key>")
+                key = args[0]
                 value = store.get(key)
                 _write_line(value if value is not None else "NULL")
             elif cmd == "":
                 continue
             else:
-                _err(f"Unknown command '{cmd}' — valid commands are SET, GET, EXIT")
+                raise KVError(f"Unknown command '{cmd}'. Allowed: SET, GET, EXIT")
         except KVError as e:
             _err(str(e))
         except OSError as e:
@@ -172,5 +150,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-
-
