@@ -13,7 +13,6 @@ class KVError(Exception):
     """Custom exception for invalid CLI usage (wrong args, unknown command)."""
     pass
 
-
 class KeyValueStore:
     """
     Append-only persistent key-value store with a simple in-memory index.
@@ -45,7 +44,6 @@ class KeyValueStore:
             sys.stderr.write(f"ERR: failed to load {DATA_FILE} — {e.strerror}\n")
 
     def _set_in_memory(self, key: str, value: str) -> None:
-        """Helper: update or insert key-value pair in in-memory index."""
         for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
@@ -54,10 +52,10 @@ class KeyValueStore:
 
     def set(self, key: str, value: str) -> None:
         """Append to log (flush+fsync) then update in-memory index."""
-        if not key:
-            raise KVError("Key cannot be empty")
-        if value is None or value == "":
-            raise KVError("Value cannot be empty")
+        if not key.strip():
+            raise KVError("Key cannot be empty.")
+        if value is None or value.strip() == "":
+            raise KVError("Value cannot be empty.")
 
         safe_key = key.encode("utf-8", errors="replace").decode("utf-8")
         safe_value = value.encode("utf-8", errors="replace").decode("utf-8")
@@ -72,14 +70,10 @@ class KeyValueStore:
         self._set_in_memory(safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
-        """Return the latest value for a key, or None if not found."""
-        if not key:
-            raise KVError("Key cannot be empty")
         for k, v in self.index:
             if k == key:
                 return v
         return None
-
 
 # ---- CLI helpers -------------------------------------------------------------
 
@@ -102,9 +96,7 @@ def _parse_command(line: str) -> Tuple[str, List[str]]:
         args.append(parts[2])
     return cmd, args
 
-
 def main() -> None:
-    """Main CLI loop: reads commands and executes them."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -123,20 +115,19 @@ def main() -> None:
                 break
             elif cmd == "SET":
                 if len(args) != 2:
-                    raise KVError("Usage: SET <key> <value>")
+                    raise KVError("SET requires exactly 2 arguments: SET <key> <value>")
                 key, value = args
                 store.set(key, value)
-                _write_line(f"OK: key '{key}' set successfully")
             elif cmd == "GET":
                 if len(args) != 1:
-                    raise KVError("Usage: GET <key>")
+                    raise KVError("GET requires exactly 1 argument: GET <key>")
                 key = args[0]
                 value = store.get(key)
                 _write_line(value if value is not None else "NULL")
             elif cmd == "":
                 continue
             else:
-                raise KVError(f"Unknown command '{cmd}'. Allowed: SET, GET, EXIT")
+                raise KVError(f"Unknown command '{cmd}'. Allowed: SET, GET, EXIT.")
         except KVError as e:
             _err(str(e))
         except OSError as e:
@@ -144,9 +135,9 @@ def main() -> None:
         except Exception as e:
             _err(f"Unexpected {type(e).__name__} — {str(e)}")
 
-
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         pass
+
