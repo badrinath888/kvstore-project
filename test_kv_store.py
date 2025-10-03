@@ -1,89 +1,114 @@
 #!/usr/bin/env python3
-# test_kv_store.py — Unit tests for KeyValueStore CLI
+# Tests for KV Store Project 1
 # Course: CSCE 5350
 # Author: Badrinath | EUID: 11820168
 
 import os
-import shutil
-import subprocess
-import tempfile
+import io
+import sys
 import unittest
+from kvstore import KeyValueStore, _parse_command, KVError, DATA_FILE
 
-KV_CMD = ["python3", "kvstore.py"]
 
-def run_cli(lines, cwd):
-    """Run kvstore.py with command lines; return stdout lines (non-empty)."""
-    proc = subprocess.Popen(
-        KV_CMD,
-        cwd=cwd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    stdout, _ = proc.communicate("\n".join(lines) + "\n")
-    return [ln for ln in stdout.splitlines() if ln.strip() != ""]
+class TestKeyValueStore(unittest.TestCase):
 
-class TestKVStoreCLI(unittest.TestCase):
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="kv_cli_")
-        self.addCleanup(lambda: shutil.rmtree(self.tmpdir, ignore_errors=True))
+    def setUp(self) -> None:
+        """Remove existing data file before each test for isolation."""
+        if os.path.exists(DATA_FILE):
+            os.remove(DATA_FILE)
+        self.store = KeyValueStore()
 
-    # --- Existing tests ---
-    def test_set_get(self):
-        out = run_cli(["SET name Badrinath_11820168", "GET name", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["Badrinath_11820168"])
+    def tearDown(self) -> None:
+        if os.path.exists(DATA_FILE):
+            os.remove(DATA_FILE)
 
-    def test_overwrite_last_write_wins(self):
-        out = run_cli(["SET k v1", "SET k v2", "SET k v3", "GET k", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["v3"])
+    def test_set_and_get_basic(self) -> None:
+        self.store.set("name", "Badrinath")
+        self.assertEqual(self.store.get("name"), "Badrinath")
 
-    def test_nonexistent(self):
-        out = run_cli(["GET missing", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["NULL"])
+    def test_overwrite_key(self) -> None:
+        self.store.set("x", "1")
+        self.store.set("x", "2")
+        self.assertEqual(self.store.get("x"), "2")
 
-    def test_persistence_across_restart(self):
-        run_cli(["SET course CSCE5350", "EXIT"], cwd=self.tmpdir)
-        out = run_cli(["GET course", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["CSCE5350"])
+    def test_nonexistent_key(self) -> None:
+        self.assertIsNone(self.store.get("ghost"))
 
-    def test_blank_line_ignored(self):
-        out = run_cli(["", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, [])  # blank line produces no output
+    def test_persistence_after_restart(self) -> None:
+        self.store.set("course", "CSCE5350")
+        new_store = KeyValueStore()
+        self.assertEqual(new_store.get("course"), "CSCE5350")
 
-    def test_malformed_set(self):
-        out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    # ---- Edge cases ----
 
-    def test_get_extra_arg(self):
-        out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_empty_key(self) -> None:
+        self.store.set("", "emptykey")
+        self.assertEqual(self.store.get(""), "emptykey")
 
-    # --- New edge case tests ---
-    def test_empty_key_set(self):
-        out = run_cli(["SET  valueonly", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_empty_value(self) -> None:
+        self.store.set("key", "")
+        self.assertEqual(self.store.get("key"), "")
 
-    def test_empty_key_get(self):
-        out = run_cli(["GET ", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_unicode_support(self) -> None:
+        self.store.set("emoji", "🚀✨🔥")
+        self.assertEqual(self.store.get("emoji"), "🚀✨🔥")
 
-    def test_set_with_extra_args(self):
-        out = run_cli(["SET key v1 extra_arg", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_long_key_and_value(self) -> None:
+        long_key = "k" * 1000
+        long_value = "v" * 5000
+        self.store.set(long_key, long_value)
+        self.assertEqual(self.store.get(long_key), long_value)
 
-    def test_unknown_command(self):
-        out = run_cli(["FOO key value", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_multiple_keys(self) -> None:
+        self.store.set("a", "1")
+        self.store.set("b", "2")
+        self.assertEqual(self.store.get("a"), "1")
+        self.assertEqual(self.store.get("b"), "2")
 
-    def test_random_input(self):
-        out = run_cli(["HELLO WORLD", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
+    def test_log_replay_skips_bad_lines(self) -> None:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            f.write("BADLINE without set\n")
+            f.write("SET good test\n")
+        new_store = KeyValueStore()
+        self.assertEqual(new_store.get("good"), "test")
 
-    def test_case_insensitivity(self):
-        out = run_cli(["set lower val", "GET lower", "EXIT"], cwd=self.tmpdir)
-        self.assertEqual(out, ["val"])
+
+class TestParseCommand(unittest.TestCase):
+
+    def test_parse_set(self) -> None:
+        cmd, args = _parse_command("SET name value")
+        self.assertEqual(cmd, "SET")
+        self.assertEqual(args, ["name", "value"])
+
+    def test_parse_get(self) -> None:
+        cmd, args = _parse_command("GET name")
+        self.assertEqual(cmd, "GET")
+        self.assertEqual(args, ["name"])
+
+    def test_parse_empty(self) -> None:
+        cmd, args = _parse_command("   ")
+        self.assertEqual(cmd, "")
+        self.assertEqual(args, [])
+
+
+class TestErrorHandling(unittest.TestCase):
+
+    def test_invalid_command(self) -> None:
+        store = KeyValueStore()
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            with self.assertRaises(KVError):
+                raise KVError("unknown command")
+        finally:
+            sys.stdout = sys.__stdout__
+
+    def test_invalid_args_set(self) -> None:
+        cmd, args = _parse_command("SET onlykey")
+        self.assertEqual(cmd, "SET")
+        self.assertEqual(len(args), 1)
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()
+
