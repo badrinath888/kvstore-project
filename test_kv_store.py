@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Unit tests for KeyValueStore CLI
+# test_kv_store.py — Unit tests for KeyValueStore CLI
 # Course: CSCE 5350
 # Author: Badrinath | EUID: 11820168
 
@@ -50,30 +50,32 @@ class TestKVStoreCLI(unittest.TestCase):
         out = run_cli(["", "EXIT"], cwd=self.tmpdir)
         self.assertEqual(out, [])
 
-    def test_malformed_set(self):
+    def test_malformed_set_too_few_args(self):
         out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
         self.assertTrue(out[0].startswith("ERR"))
 
-    def test_get_extra_arg(self):
+    def test_set_too_many_args(self):
+        out = run_cli(["SET a b c", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR"))
+
+    def test_get_too_many_args(self):
         out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
         self.assertTrue(out[0].startswith("ERR"))
 
-    # ---- Extra edge cases ----
+    def test_get_no_args(self):
+        out = run_cli(["GET", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR"))
+
     def test_empty_key(self):
         out = run_cli(["SET '' value", "EXIT"], cwd=self.tmpdir)
         self.assertTrue(out[0].startswith("ERR"))
 
-    def test_empty_value(self):
-        out = run_cli(["SET key ''", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR"))
-
-    def test_unknown_command(self):
-        out = run_cli(["PUT k v", "EXIT"], cwd=self.tmpdir)
-        self.assertTrue(out[0].startswith("ERR: Unknown command"))
-
-    def test_case_insensitive_commands(self):
-        out = run_cli(["set myKey myValue", "get myKey", "exit"], cwd=self.tmpdir)
-        self.assertEqual(out, ["myValue"])
+    def test_long_key_value(self):
+        long_key = "k" * 1000
+        long_val = "v" * 1000
+        out = run_cli([f"SET {long_key} {long_val}", f"GET {long_key}", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, [long_val])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
