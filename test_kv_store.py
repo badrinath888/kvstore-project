@@ -1,118 +1,105 @@
 #!/usr/bin/env python3
-# Unit tests for KV Store Project 1
+# test_kv_store.py — Unit tests for KeyValueStore CLI
 # Course: CSCE 5350
 # Author: Badrinath | EUID: 11820168
 
-import io
 import os
-import sys
+import shutil
+import subprocess
+import tempfile
 import unittest
-from unittest.mock import patch
 
-import kvstore
+KV_CMD = ["python3", "kvstore.py"]
 
+def run_cli(lines, cwd):
+    """Run kvstore.py with command lines; return stdout lines (non-empty)."""
+    proc = subprocess.Popen(
+        KV_CMD,
+        cwd=cwd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout, _ = proc.communicate("\n".join(lines) + "\n")
+    return [ln for ln in stdout.splitlines() if ln.strip() != ""]
 
-class TestKeyValueStore(unittest.TestCase):
-    """Tests for the core KeyValueStore functionality."""
-
+class TestKVStoreCLI(unittest.TestCase):
     def setUp(self):
-        # Remove test data file before each test
-        if os.path.exists(kvstore.DATA_FILE):
-            os.remove(kvstore.DATA_FILE)
-        self.store = kvstore.KeyValueStore()
+        self.tmpdir = tempfile.mkdtemp(prefix="kv_cli_")
+        self.addCleanup(lambda: shutil.rmtree(self.tmpdir, ignore_errors=True))
 
-    def tearDown(self):
-        if os.path.exists(kvstore.DATA_FILE):
-            os.remove(kvstore.DATA_FILE)
+    # ---- Basic Required Tests ----
+    def test_set_get(self):
+        out = run_cli(["SET name Badrinath_11820168", "GET name", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["Badrinath_11820168"])
 
-    def test_set_and_get(self):
-        self.store.set("name", "Badrinath")
-        self.assertEqual(self.store.get("name"), "Badrinath")
+    def test_overwrite_last_write_wins(self):
+        out = run_cli(["SET k v1", "SET k v2", "SET k v3", "GET k", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["v3"])
 
-    def test_overwrite_key(self):
-        self.store.set("course", "CSCE5300")
-        self.store.set("course", "CSCE5350")
-        self.assertEqual(self.store.get("course"), "CSCE5350")
+    def test_nonexistent(self):
+        out = run_cli(["GET missing", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["NULL"])
 
-    def test_nonexistent_key(self):
-        self.assertIsNone(self.store.get("missing"))
+    def test_persistence_across_restart(self):
+        run_cli(["SET course CSCE5350", "EXIT"], cwd=self.tmpdir)
+        out = run_cli(["GET course", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["CSCE5350"])
 
-    def test_persistence(self):
-        self.store.set("foo", "bar")
-        # Reload from file
-        s2 = kvstore.KeyValueStore()
-        self.assertEqual(s2.get("foo"), "bar")
+    # ---- Edge Case Tests ----
+    def test_blank_line_ignored(self):
+        out = run_cli(["", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, [])
 
-    def test_empty_key_rejected(self):
-        with self.assertRaises(kvstore.KVError):
-            self.store.set("", "value")
+    def test_malformed_set_missing_value(self):
+        out = run_cli(["SET onlykey", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR"))
 
-    def test_unicode_handling(self):
-        key = "ключ"  # Russian word for "key"
-        val = "значение"  # "value"
-        self.store.set(key, val)
-        self.assertEqual(self.store.get(key), val)
+    def test_get_extra_arg(self):
+        out = run_cli(["GET key extra", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR"))
 
-    def test_long_key_value(self):
-        key = "k" * 1000
-        val = "v" * 5000
-        self.store.set(key, val)
-        self.assertEqual(self.store.get(key), val)
+    def test_set_extra_arg(self):
+        out = run_cli(["SET key v1 extra", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR"))
 
+    def test_empty_key(self):
+        out = run_cli(["SET  value_only", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(any("ERR" in line for line in out))
 
-class TestCLI(unittest.TestCase):
-    """Tests for the command-line interface and error messages."""
+    def test_empty_value(self):
+        out = run_cli(["SET key ", "GET key", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(any("ERR" in line for line in out))
 
-    def run_cli(self, input_data: str) -> str:
-        buf_in = io.StringIO(input_data)
-        buf_out = io.StringIO()
-        with patch("sys.stdin", buf_in), patch("sys.stdout", buf_out):
-            kvstore.main()
-        return buf_out.getvalue()
+    def test_unicode_key_value(self):
+        out = run_cli(["SET café naïve", "GET café", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["naïve"])
 
-    def test_cli_set_and_get(self):
-        out = self.run_cli("SET course CSCE5350\nGET course\nEXIT\n")
-        self.assertIn("CSCE5350", out)
+    def test_long_key_and_value(self):
+        long_key = "k" * 1000
+        long_value = "v" * 2000
+        out = run_cli([f"SET {long_key} {long_value}", f"GET {long_key}", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, [long_value])
 
-    def test_cli_nonexistent_key(self):
-        out = self.run_cli("GET nope\nEXIT\n")
-        self.assertIn("NULL", out)
+    def test_case_insensitive_commands(self):
+        out = run_cli(["set key value", "gEt key", "ExIt"], cwd=self.tmpdir)
+        self.assertEqual(out, ["value"])
 
-    def test_cli_exit(self):
-        out = self.run_cli("EXIT\n")
-        self.assertEqual(out.strip(), "")
+    def test_unknown_command(self):
+        out = run_cli(["FOO bar", "EXIT"], cwd=self.tmpdir)
+        self.assertTrue(out[0].startswith("ERR"))
 
-    def test_cli_set_missing_args(self):
-        out = self.run_cli("SET onlykey\nEXIT\n")
-        self.assertIn("ERR: SET requires exactly 2 arguments", out)
+    def test_multiple_spaces_between_args(self):
+        out = run_cli(["SET   spaced    value", "GET spaced", "EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, ["value"])
 
-    def test_cli_set_too_many_args(self):
-        out = self.run_cli("SET k v extra\nEXIT\n")
-        self.assertIn("ERR: SET received too many arguments", out)
-
-    def test_cli_get_wrong_args(self):
-        out = self.run_cli("GET k extra\nEXIT\n")
-        self.assertIn("ERR: GET requires exactly 1 argument", out)
-
-    def test_cli_unknown_command(self):
-        out = self.run_cli("DELETE k\nEXIT\n")
-        self.assertIn("ERR: Unknown command", out)
-
-    def test_cli_empty_line(self):
-        out = self.run_cli("\nEXIT\n")
-        self.assertEqual(out.strip(), "")
-
-    def test_cli_unicode(self):
-        out = self.run_cli("SET ключ значение\nGET ключ\nEXIT\n")
-        self.assertIn("значение", out)
-
-    def test_cli_long_value(self):
-        long_val = "x" * 2000
-        out = self.run_cli(f"SET k {long_val}\nGET k\nEXIT\n")
-        self.assertIn(long_val, out)
-
+    def test_exit_without_commands(self):
+        out = run_cli(["EXIT"], cwd=self.tmpdir)
+        self.assertEqual(out, [])
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)
+
 
 
