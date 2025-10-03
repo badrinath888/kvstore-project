@@ -1,4 +1,5 @@
-﻿data.db
+data.db
 __pycache__/
 *.pyc
 gradebot
+

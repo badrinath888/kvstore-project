@@ -1,4 +1,4 @@
-﻿﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 # KV Store Project 1 — Simple Append-Only Key-Value Store
 # Course: CSCE 5350
 # Author: Badrinath | EUID: 11820168
