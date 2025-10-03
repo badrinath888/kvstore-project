@@ -1,4 +1,4 @@
-﻿# KV Store Project 1 — Simple Append-Only Key-Value Store
+# KV Store Project 1 — Simple Append-Only Key-Value Store
 
 **Course:** CSCE 5350  
 **Author:** Badrinath  
@@ -8,35 +8,31 @@
 
 ## 📖 Overview
 This project implements a **persistent key-value store** with a simple command-line interface (CLI).  
-The store supports the following commands:
+It supports the following commands:
 
-- `SET <key> <value>` — Store or overwrite a value for a given key  
-- `GET <key>` — Retrieve the most recent value for a given key  
-- `EXIT` — Exit the program safely  
+- `SET <key> <value>` → Store or update a key-value pair.  
+- `GET <key>` → Retrieve the value for a key. Returns `NULL` if not found.  
+- `EXIT` → Quit the program.  
 
-Data is persisted in an **append-only log file** (`data.db`).  
-On restart, the program **replays the log** to rebuild the in-memory index.  
-The design enforces **last-write-wins** semantics, so the most recent value for a key is always returned.  
+Data is stored in an **append-only log** (`data.db`).  
+On restart, the log is replayed to rebuild the in-memory index.  
+The store enforces **last-write-wins** semantics.
 
 ---
 
 ## ✨ Features
-- Append-only file storage (`data.db`)  
-- Crash recovery by log replay  
-- Immediate durability using `flush + fsync`  
-- In-memory index (no built-in dict/map)  
-- Robust CLI with **clear error messages**  
-- Automated unit tests covering **normal and edge cases**  
+- Persistent storage in `data.db` (append-only writes).  
+- In-memory index (implemented without built-in dict/map).  
+- Crash recovery via log replay.  
+- Immediate durability (using `flush + fsync`).  
+- Robust CLI with **clear error messages**.  
+- **Logging system** for debugging and maintainability.  
+- Extensive unit tests, covering **normal cases and edge cases**.  
 
 ---
 
 ## ⚙️ Installation
-
-### 1. Prerequisites
-- Python **3.8 or higher**  
-- Git installed  
-
-### 2. Clone the Repository
-```bash
-git clone https://github.com/badrinath888/kvstore-project.git
-cd kvstore-project
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/badrinath888/kvstore-project.git
+   cd kvstore-project
