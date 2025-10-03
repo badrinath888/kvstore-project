@@ -24,15 +24,13 @@ The design enforces **last-write-wins** semantics, so the most recent value for 
 - Linear in-memory index (no built-in dict/map)
 - Crash recovery by log replay
 - Immediate durability via `flush + fsync`
-- Robust CLI with **informative error handling**
-- Extensive unit tests, including **edge cases**
+- Robust CLI with **clear and descriptive error messages**
+- Comprehensive unit tests, including **edge cases**
 
 ---
 
 ## ⚙️ Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/badrinath888/kvstore-project.git
-   cd kvstore-project
-
-
+Clone the repository:
+```bash
+git clone https://github.com/badrinath888/kvstore-project.git
+cd kvstore-project
