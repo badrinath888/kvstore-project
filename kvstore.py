@@ -4,13 +4,13 @@ CSCE 5350 — Project 1: Simple Append-Only Key-Value Store
 Author: Badrinath
 EUID: 11820168
 
-This module implements a persistent key-value store with the following features:
+A persistent key-value store with:
 - SET <key> <value>
 - GET <key>
 - EXIT
 
-Data is persisted using an append-only log (`data.db`).
-On restart, the store replays the log to rebuild the in-memory index.
+Data is stored in an append-only log (data.db). On startup, the store replays
+the log to rebuild the in-memory index. Implements last-write-wins semantics.
 """
 
 import os
@@ -27,13 +27,11 @@ LOG_FILE = "kvstore.log"
 logger = logging.getLogger("kvstore")
 logger.setLevel(logging.DEBUG)
 
-# rotating log file: 1 MB max, keep 3 backups
 _handler = RotatingFileHandler(LOG_FILE, maxBytes=1_000_000, backupCount=3)
-_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 _handler.setFormatter(_formatter)
 logger.addHandler(_handler)
 
-# also log to stderr for immediate feedback
 _console = logging.StreamHandler()
 _console.setFormatter(_formatter)
 logger.addHandler(_console)
@@ -41,31 +39,42 @@ logger.addHandler(_console)
 
 # ---------------- Custom Exception ----------------
 class KVError(Exception):
-    """Custom exception for key-value store errors."""
+    """Custom exception for errors in the key-value store."""
     pass
 
 
-# ---------------- KV Store Implementation ----------------
+# ---------------- KV Store ----------------
 class KVStore:
     """
     A simple append-only key-value store.
 
     Attributes:
-        index (List[Tuple[str, str]]): In-memory list of (key, value) pairs.
+        data_file (str): Path to the data file.
+        index (List[Tuple[str, str]]): In-memory key-value pairs.
     """
 
     def __init__(self, data_file: str = DATA_FILE) -> None:
+        """
+        Initialize the store and load existing data.
+
+        Args:
+            data_file (str): Path to the append-only log file.
+        """
         self.data_file = data_file
         self.index: List[Tuple[str, str]] = []
-        logger.info("Initializing KVStore with data file=%s", self.data_file)
+        logger.info("Starting KVStore with data file=%s", self.data_file)
         self._load()
 
     def _load(self) -> None:
-        """Replay the append-only log into memory."""
+        """
+        Load data from the append-only log file into memory.
+
+        Raises:
+            KVError: If the file cannot be read or decoded.
+        """
         if not os.path.exists(self.data_file):
             logger.info("Data file %s not found. Starting fresh.", self.data_file)
             return
-
         try:
             with open(self.data_file, "r", encoding="utf-8") as f:
                 for line in f:
@@ -75,11 +84,17 @@ class KVStore:
                         self._set_index(key, value)
             logger.info("Loaded %d entries from %s", len(self.index), self.data_file)
         except (OSError, UnicodeDecodeError) as e:
-            logger.exception("Error loading data file %s", self.data_file)
-            raise KVError(f"Failed to load {self.data_file}") from e
+            logger.exception("Failed to load %s", self.data_file)
+            raise KVError(f"Error loading {self.data_file}") from e
 
     def _set_index(self, key: str, value: str) -> None:
-        """Helper to insert or overwrite a key in the in-memory index."""
+        """
+        Update or insert a key-value pair in memory.
+
+        Args:
+            key (str): The key to insert/update.
+            value (str): The associated value.
+        """
         for i, (k, _) in enumerate(self.index):
             if k == key:
                 self.index[i] = (key, value)
@@ -88,8 +103,14 @@ class KVStore:
 
     def set(self, key: str, value: str) -> None:
         """
-        Store a key-value pair.
-        Writes to disk immediately (append-only).
+        Persist a key-value pair and update memory.
+
+        Args:
+            key (str): Key string.
+            value (str): Value string.
+
+        Raises:
+            KVError: If writing to the file fails.
         """
         try:
             with open(self.data_file, "a", encoding="utf-8") as f:
@@ -99,15 +120,20 @@ class KVStore:
             self._set_index(key, value)
             logger.debug("SET key=%s value=%s", key, value)
         except OSError as e:
-            logger.exception("I/O error on SET key=%s", key)
-            raise KVError(f"Failed to set key {key}") from e
+            logger.exception("Failed to persist key=%s", key)
+            raise KVError(f"Unable to set key '{key}' due to I/O error.") from e
 
     def get(self, key: str) -> Optional[str]:
         """
-        Retrieve the value for a key.
-        Returns None if the key does not exist.
+        Retrieve the latest value for a key.
+
+        Args:
+            key (str): Key string.
+
+        Returns:
+            Optional[str]: Value if found, otherwise None.
         """
-        for k, v in reversed(self.index):  # last write wins
+        for k, v in reversed(self.index):
             if k == key:
                 logger.debug("GET key=%s -> value=%s", key, v)
                 return v
@@ -115,28 +141,31 @@ class KVStore:
         return None
 
 
-# ---------------- CLI Implementation ----------------
+# ---------------- CLI ----------------
 def _write_out(msg: str) -> None:
-    """Safe print to STDOUT."""
+    """Print to STDOUT safely."""
     sys.stdout.write(msg + "\n")
     sys.stdout.flush()
 
 
 def _write_err(msg: str) -> None:
-    """Safe print to STDERR."""
+    """Print error to STDERR safely."""
     sys.stderr.write("ERR: " + msg + "\n")
     sys.stderr.flush()
 
 
 def main() -> None:
-    """Command-line loop for the KV store."""
+    """
+    Command-line interface loop.
+    Handles SET, GET, and EXIT commands from STDIN.
+    """
     store = KVStore()
 
     while True:
         try:
             line = sys.stdin.readline()
             if not line:  # EOF
-                logger.info("Received EOF, exiting gracefully.")
+                logger.info("EOF reached, exiting.")
                 break
 
             parts = line.strip().split(" ", 2)
@@ -146,40 +175,36 @@ def main() -> None:
             cmd = parts[0].upper()
 
             if cmd == "EXIT":
-                logger.info("EXIT command received. Shutting down.")
+                logger.info("EXIT command received.")
                 break
             elif cmd == "SET":
                 if len(parts) != 3:
-                    _write_err("Usage: SET <key> <value>")
-                    logger.warning("Invalid SET command syntax: %s", line.strip())
+                    _write_err("Invalid SET syntax. Usage: SET <key> <value>")
                     continue
                 key, value = parts[1], parts[2]
                 store.set(key, value)
             elif cmd == "GET":
                 if len(parts) != 2:
-                    _write_err("Usage: GET <key>")
-                    logger.warning("Invalid GET command syntax: %s", line.strip())
+                    _write_err("Invalid GET syntax. Usage: GET <key>")
                     continue
                 key = parts[1]
                 value = store.get(key)
-                if value is not None:
-                    _write_out(value)
-                else:
-                    _write_out("NULL")
+                _write_out(value if value is not None else "NULL")
             else:
-                _write_err(f"Unknown command: {cmd}")
-                logger.warning("Unknown command: %s", cmd)
+                _write_err(f"Unknown command: {cmd}. Valid commands: SET, GET, EXIT.")
+                logger.warning("Unknown command received: %s", cmd)
 
         except KVError as e:
             _write_err(str(e))
             logger.error("KVError: %s", e)
         except Exception as e:
-            _write_err("Unexpected internal error")
+            _write_err("Unexpected internal error occurred. Please try again.")
             logger.exception("Unhandled exception in CLI loop: %s", e)
 
 
 if __name__ == "__main__":
     main()
+
 
 
 
