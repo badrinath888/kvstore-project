@@ -1,4 +1,4 @@
-﻿# KV Store Project 1 — Simple Append-Only Key-Value Store
+﻿﻿# KV Store Project 1 — Simple Append-Only Key-Value Store
 
 **Course:** CSCE 5350  
 **Author:** Badrinath  
