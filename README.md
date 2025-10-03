@@ -36,5 +36,3 @@ The design enforces **last-write-wins** semantics, so the most recent value for 
    cd kvstore-project
 
 
-
-
