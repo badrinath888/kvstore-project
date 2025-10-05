@@ -20,8 +20,12 @@ class KVError(Exception):
 
 def setup_logging() -> None:
     """
-    Configure structured, UTF-8 safe logging to kvstore.log.
-    Logging never prints to stdout (so it does not interfere with CLI output).
+    Configure structured logging to a file.
+
+    Notes:
+        - Logging goes only to kvstore.log (no stdout noise).
+        - We keep it simple and resilient: if logging fails to init,
+          we silently continue rather than aborting the program.
     """
     try:
         logging.basicConfig(
@@ -30,15 +34,22 @@ def setup_logging() -> None:
             format="%(asctime)s [%(levelname)s] %(message)s"
         )
     except Exception:
-        # If logging cannot initialize, we still want the program to run.
-        # Do not print to stdout; Gradebot reads stdout.
+        # Do not print to stdout; Gradebot consumes stdout.
         pass
 
 
 def _apply_set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
     """
-    In-memory last-write-wins update (no built-in dict).
-    Scans the list and overwrites existing key or appends a new pair.
+    Apply a last-write-wins update to the in-memory index (list based).
+
+    Args:
+        index: Mutable list of (key, value) tuples.
+        key:   Key to insert or overwrite.
+        value: Value to associate with the key.
+
+    Implementation:
+        - Linear scan replaces an existing key; otherwise appends.
+        - No dict/map usage (assignment rule).
     """
     for i, (k, _) in enumerate(index):
         if k == key:
@@ -49,31 +60,35 @@ def _apply_set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> 
 
 def load_data(index: List[Tuple[str, str]]) -> Tuple[int, int, int]:
     """
-    Replay the append-only log from DATA_FILE into the in-memory index.
+    Replay the append-only log (DATA_FILE) into the in-memory index.
+
+    Args:
+        index: The list that will be populated with (key, value) pairs.
 
     Returns:
-        tuple: (total_lines, applied_sets, skipped_lines)
+        (total_lines, applied_sets, skipped_lines)
 
     Behavior:
-      - Only lines of the form: "SET <key> <value>" are applied.
-      - Malformed lines are skipped and logged with line numbers.
-      - File and decode errors are logged with details.
-      - Nothing is printed to stdout.
+        - Accepts only lines of the form: "SET <key> <value>" (value may contain spaces).
+        - Malformed lines are skipped and logged with line numbers.
+        - All errors are logged; in addition we emit a short ASCII error on STDERR
+          so users have visible feedback without polluting STDOUT.
     """
     total = 0
     applied = 0
     skipped = 0
 
     if not os.path.exists(DATA_FILE):
-        logging.info("No existing data file. Starting fresh.")
+        logging.info("No %s file found; starting fresh.", DATA_FILE)
         return (0, 0, 0)
 
     try:
-        with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
+        # Use strict decoding so Unicode errors are raised and handled explicitly.
+        with open(DATA_FILE, "r", encoding="utf-8", errors="strict") as f:
             for lineno, raw in enumerate(f, start=1):
                 total += 1
-                line = raw.strip()
-                if not line:
+                line = raw.rstrip("\n")
+                if not line.strip():
                     skipped += 1
                     logging.debug("Skipping empty line at %d", lineno)
                     continue
@@ -88,18 +103,39 @@ def load_data(index: List[Tuple[str, str]]) -> Tuple[int, int, int]:
                     logging.warning("Malformed line at %d: %r", lineno, line)
 
         logging.info(
-            "load_data finished: total=%d applied=%d skipped=%d",
+            "load_data complete: total=%d applied=%d skipped=%d",
             total, applied, skipped
         )
         return (total, applied, skipped)
 
     except UnicodeDecodeError as e:
+        msg = f"ERR: failed to load {DATA_FILE} - invalid UTF-8"
+        # Visible to the user (STDERR), ASCII only
+        try:
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
         logging.error("Unicode decode error while loading %s: %s", DATA_FILE, e)
         return (total, applied, skipped)
+
     except OSError as e:
+        msg = f"ERR: failed to load {DATA_FILE} - {e.strerror or 'os error'}"
+        try:
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
         logging.error("OS error while loading %s: %s", DATA_FILE, e)
         return (total, applied, skipped)
+
     except Exception as e:
+        msg = f"ERR: failed to load {DATA_FILE} - unexpected error"
+        try:
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
         logging.error("Unexpected error while loading %s: %s", DATA_FILE, e)
         return (total, applied, skipped)
 
@@ -114,32 +150,38 @@ class KeyValueStore:
     Startup:
         Replays the log to rebuild an in-memory last-write-wins index.
 
-    Note:
-        This project intentionally avoids dict/map to satisfy the assignment rule.
+    Constraint:
+        Intentionally avoids dict/map to satisfy the assignment rule.
     """
 
     def __init__(self) -> None:
-        """Initialize an empty index and load existing data from the append-only log."""
+        """
+        Construct an empty store and eagerly load prior state from disk.
+
+        Raises:
+            None. Any I/O or decoding errors during load are logged and surfaced
+            on STDERR by load_data(), but do not prevent the process from running.
+        """
         self.index: List[Tuple[str, str]] = []
         load_data(self.index)
 
     def set(self, key: str, value: str) -> None:
         """
-        Persist a key-value pair to DATA_FILE and update the in-memory index.
+        Persist a key-value pair to disk and update the in-memory index.
 
         Args:
-            key (str): Key name.
-            value (str): Value to store.
+            key:   Key to set.
+            value: Value to store (arbitrary UTF-8 string).
 
         Raises:
-            KVError: If the write to the data file fails.
+            KVError: If the input contains invalid UTF-8 or if the write/fsync fails.
         """
-        # Sanitize to be safe for file I/O
+        # Ensure we only write valid UTF-8 to the log file
         try:
             safe_key = key.encode("utf-8", errors="strict").decode("utf-8")
             safe_value = value.encode("utf-8", errors="strict").decode("utf-8")
         except UnicodeError as e:
-            logging.error("Unicode error preparing SET: %s", e)
+            logging.error("Unicode error in SET input: %s", e)
             raise KVError("invalid utf-8 input") from e
 
         try:
@@ -148,23 +190,23 @@ class KeyValueStore:
                 f.flush()
                 os.fsync(f.fileno())
         except OSError as e:
-            logging.error("Failed to write to %s: %s", DATA_FILE, e)
+            logging.error("Write failure on %s: %s", DATA_FILE, e)
             raise KVError("write failed") from e
         except UnicodeError as e:
-            logging.error("Unicode error writing to %s: %s", DATA_FILE, e)
+            logging.error("Unicode write failure on %s: %s", DATA_FILE, e)
             raise KVError("write failed") from e
 
         _apply_set_in_memory(self.index, safe_key, safe_value)
 
     def get(self, key: str) -> Optional[str]:
         """
-        Retrieve the value for a key.
+        Look up a key in the in-memory index.
 
         Args:
-            key (str): Key to look up.
+            key: Key to look up.
 
         Returns:
-            Optional[str]: The stored value if found, otherwise None.
+            The latest stored value if present; otherwise None.
         """
         for k, v in self.index:
             if k == key:
@@ -177,39 +219,42 @@ class KeyValueStore:
 
 def _write_line(text: str) -> None:
     """
-    Write a line to stdout in a UTF-8 safe way.
-    Gradebot reads stdout; do not print logs here.
+    Safely write a single line to STDOUT (Gradebot reads STDOUT).
+
+    Args:
+        text: The text to print; a newline is added automatically.
     """
     sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     sys.stdout.flush()
 
 
 def _err(msg: str) -> None:
-    """Write an error message to stdout with ERR prefix."""
+    """
+    Print a user-facing error line to STDOUT.
+
+    Args:
+        msg: Error message (already human-readable).
+    """
     _write_line(f"ERR: {msg}")
 
 
 def _parse_command(line: str) -> Tuple[str, List[str]]:
     """
-    Parse a CLI command into (command, args).
+    Parse one CLI line into a command and its arguments.
 
-    Accepts:
-        SET <key> <value>
-        GET <key>
-        EXIT
+    Supported shapes:
+        - SET <key> <value>     (value may contain spaces)
+        - GET <key>
+        - EXIT
 
     Returns:
-        (cmd, args): cmd is uppercase, args is a list of tokens.
-
-    Notes:
-        We use maxsplit=2 for SET lines so values can contain spaces.
+        (cmd, args) where cmd is uppercase and args is a list of tokens.
     """
-    line = line.strip()
-    if not line:
+    s = line.strip()
+    if not s:
         return "", []
 
-    # First token is the command; the rest as one chunk for potential value with spaces.
-    parts = line.split(maxsplit=2)
+    parts = s.split(maxsplit=2)
     cmd = parts[0].upper()
     args: List[str] = []
     if len(parts) > 1:
@@ -221,14 +266,14 @@ def _parse_command(line: str) -> Tuple[str, List[str]]:
 
 def run_repl() -> None:
     """
-    Main REPL loop for processing commands.
+    Run the interactive read-eval-print loop for the store.
 
     Behavior:
-      - SET <key> <value>: store or update a key-value pair.
-      - GET <key>: print value or NULL.
-      - EXIT: terminate the program.
+        - SET <key> <value>: store/update a pair (prints nothing on success).
+        - GET <key>: prints the value or "NULL".
+        - EXIT: terminates the program.
     """
-    # Try to ensure UTF-8 streams without crashing on older Pythons.
+    # Keep streams UTF-8 tolerant without crashing on older Pythons.
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -271,14 +316,20 @@ def run_repl() -> None:
 
         except KVError as e:
             _err(str(e))
-            logging.warning("KVError for line %r: %s", line, e)
+            logging.warning("KVError for input %r: %s", line, e)
         except (OSError, UnicodeError) as e:
             _err(f"system error - {e}")
-            logging.error("System error for line %r: %s", line, e)
+            logging.error("System error for input %r: %s", line, e)
 
 
 def main() -> None:
-    """Program entrypoint: set up logging and run the REPL."""
+    """
+    Program entry point.
+
+    Steps:
+        1) Initialize logging.
+        2) Run the REPL until EXIT or EOF.
+    """
     setup_logging()
     run_repl()
 
