@@ -30,3 +30,7 @@ The program is completely CLI-based and demonstrates how real databases ensure c
 ```bash
 git clone https://github.com/badrinath888/kvstore-project.git
 cd kvstore-project
+
+## Gradebot Result (Project 1)
+
+![Gradebot Rubric](gradebot_screenshot.png)
