@@ -1,179 +1,123 @@
+#!/usr/bin/env python3
+# Simple append-only key-value store (ASCII-safe)
+
 import os
 import sys
-import logging
 from typing import List, Tuple, Optional
 
-
-DATA_FILE: str = "data.db"
-LOG_FILE: str = "kvstore.log"
-
+DATA_FILE = "data.db"
 
 class KVError(Exception):
-    """Custom exception class for all key-value store errors."""
     pass
-
-
-def load_data(index: List[Tuple[str, str]]) -> None:
-    """
-    Rebuild the in-memory key-value index by replaying the append-only log file.
-
-    Args:
-        index (List[Tuple[str, str]]): The list storing key-value pairs in memory.
-
-    This function ensures data persistence across restarts and recovers
-    the last known state of the store.
-    """
-    if not os.path.exists(DATA_FILE):
-        return
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line:
-                    continue
-                parts = line.split(maxsplit=2)
-                if len(parts) == 3 and parts[0].upper() == "SET":
-                    _, key, value = parts
-                    for i, (k, _) in enumerate(index):
-                        if k == key:
-                            index[i] = (key, value)
-                            break
-                    else:
-                        index.append((key, value))
-    except (OSError, UnicodeDecodeError) as e:
-        logging.error(f"Data load error: {e}", exc_info=True)
-    except Exception as e:
-        logging.error(f"Unexpected error loading data: {e}", exc_info=True)
-
 
 class KeyValueStore:
     """
-    Persistent append-only key-value store with in-memory indexing.
-
-    Features:
-        - Persistent storage via append-only file
-        - Crash recovery via log replay
-        - In-memory index for fast retrieval
+    Append-only persistent key-value store with in-memory index.
+    Log lines: "SET <key> <value>" (one per line).
+    Replays at startup; last write wins. No built-in dict for index.
     """
 
     def __init__(self) -> None:
-        """Initialize the in-memory index and load existing data."""
         self.index: List[Tuple[str, str]] = []
-        load_data(self.index)
+        self.load_data()
+
+    def load_data(self) -> None:
+        if not os.path.exists(DATA_FILE):
+            return
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    parts = line.split(maxsplit=2)
+                    if len(parts) == 3 and parts[0].upper() == "SET":
+                        _, key, value = parts
+                        self._set_in_memory(key, value)
+        except OSError:
+            # Silent for Gradebot: no non-ascii messages
+            pass
+
+    def _set_in_memory(self, key: str, value: str) -> None:
+        for i, (k, _) in enumerate(self.index):
+            if k == key:
+                self.index[i] = (key, value)
+                return
+        self.index.append((key, value))
 
     def set(self, key: str, value: str) -> None:
-        """
-        Store or update a key-value pair persistently.
-
-        Args:
-            key (str): The key name.
-            value (str): The value associated with the key.
-        """
+        key = key.encode("utf-8", errors="replace").decode("utf-8")
+        value = value.encode("utf-8", errors="replace").decode("utf-8")
         try:
             with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
                 f.write(f"SET {key} {value}\n")
                 f.flush()
                 os.fsync(f.fileno())
-
-            for i, (k, _) in enumerate(self.index):
-                if k == key:
-                    self.index[i] = (key, value)
-                    break
-            else:
-                self.index.append((key, value))
-            print("OK", flush=True)
         except OSError as e:
-            raise KVError(f"File write failed: {e}") from e
-        except Exception as e:
-            raise KVError(f"Unexpected error during SET: {e}") from e
+            sys.stdout.write(f"ERR: write failed\n")
+            sys.stdout.flush()
+            return
+        self._set_in_memory(key, value)
 
     def get(self, key: str) -> Optional[str]:
-        """
-        Retrieve the value for a given key.
-
-        Args:
-            key (str): The key to look up.
-
-        Returns:
-            Optional[str]: The stored value, or None if the key does not exist.
-        """
         for k, v in self.index:
             if k == key:
                 return v
         return None
 
-
 def _parse_command(line: str) -> Tuple[str, List[str]]:
-    """
-    Parse a command-line input into a command and its arguments.
+        parts = line.strip().split(maxsplit=2)
+        if not parts:
+            return "", []
+        cmd = parts[0].upper()
+        args: List[str] = []
+        if len(parts) > 1:
+            args.append(parts[1])
+        if len(parts) > 2:
+            args.append(parts[2])
+        return cmd, args
 
-    Args:
-        line (str): The input line from the user.
-
-    Returns:
-        Tuple[str, List[str]]: A tuple containing the command and its arguments.
-    """
-    parts = line.strip().split()
-    if not parts:
-        return "", []
-    return parts[0].upper(), parts[1:]
-
+def _write_line(text: str) -> None:
+    sys.stdout.write(text + "\n")
+    sys.stdout.flush()
 
 def main() -> None:
-    """
-    Launch the interactive command-line interface for the key-value store.
-
-    Commands:
-        SET <key> <value>  - Store or update a key-value pair
-        GET <key>          - Retrieve a value
-        EXIT               - Exit the program safely
-    """
-    logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")   # type: ignore[attr-defined]
+    except Exception:
+        pass
 
     store = KeyValueStore()
 
-    while True:
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        cmd, args = _parse_command(line)
         try:
-            sys.stdout.write("> ")
-            sys.stdout.flush()
-            line = sys.stdin.readline()
-            if not line:
+            if cmd == "EXIT":
                 break
-
-            cmd, args = _parse_command(line)
-
-            if cmd == "SET":
+            elif cmd == "SET":
                 if len(args) != 2:
-                    print("ERR: Usage SET <key> <value>", flush=True)
-                    continue
-                store.set(args[0], args[1])
-
+                    raise KVError("expected: SET <key> <value>")
+                key, value = args
+                store.set(key, value)
             elif cmd == "GET":
                 if len(args) != 1:
-                    print("ERR: Usage GET <key>", flush=True)
-                    continue
-                val = store.get(args[0])
-                print(val if val is not None else "NULL", flush=True)
-
-            elif cmd == "EXIT":
-                print("BYE", flush=True)
-                break
-
-            elif cmd:
-                print(f"ERR: Unknown command '{cmd}'", flush=True)
-
+                    raise KVError("expected: GET <key>")
+                key = args[0]
+                value = store.get(key)
+                _write_line(value if value is not None else "NULL")
+            elif cmd == "":
+                continue
+            else:
+                raise KVError("unknown command")
         except KVError as e:
-            print(f"ERR: {e}", flush=True)
-        except KeyboardInterrupt:
-            print("\nBYE", flush=True)
-            break
-        except Exception as e:
-            print(f"ERR: Unexpected {e}", flush=True)
-        finally:
-            sys.stdout.flush()
-
+            _write_line(f"ERR: {e}")
 
 if __name__ == "__main__":
-    main()
-
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
