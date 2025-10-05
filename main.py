@@ -3,7 +3,6 @@ import sys
 import logging
 from typing import List, Tuple, Optional
 
-
 DATA_FILE = "data.db"
 LOG_FILE = "kvstore.log"
 
@@ -15,8 +14,10 @@ class KVError(Exception):
 
 def load_data(index: List[Tuple[str, str]]) -> None:
     """
-    Rebuild the in-memory index from the append-only data file.
-    Handles UTF-8 safely and ignores malformed lines.
+    Load data from the persistent file into memory.
+
+    Args:
+        index (List[Tuple[str, str]]): In-memory key-value index.
     """
     if not os.path.exists(DATA_FILE):
         return
@@ -36,27 +37,26 @@ def load_data(index: List[Tuple[str, str]]) -> None:
                     else:
                         index.append((key, value))
     except (OSError, UnicodeDecodeError) as e:
-        logging.error(f"File read error: {e}")
+        logging.error(f"Error reading data file: {e}")
     except Exception as e:
-        raise KVError(f"Unexpected data load error: {e}") from e
+        raise KVError(f"Unexpected load error: {e}") from e
 
 
 class KeyValueStore:
-    """
-    Simple persistent key-value store.
-    Uses append-only file persistence and in-memory indexing.
-    """
+    """A simple persistent key-value store using an append-only file."""
 
     def __init__(self) -> None:
-        """Initialize index and load existing data."""
+        """Initialize in-memory index and load existing data."""
         self.index: List[Tuple[str, str]] = []
         load_data(self.index)
 
     def set(self, key: str, value: str) -> None:
         """
-        Store a key-value pair persistently.
-        Raises:
-            KVError: If writing to disk fails.
+        Persist a key-value pair and update the in-memory index.
+
+        Args:
+            key (str): The key to store.
+            value (str): The value to associate with the key.
         """
         try:
             with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
@@ -71,28 +71,62 @@ class KeyValueStore:
                 self.index.append((key, value))
             print("OK", flush=True)
         except OSError as e:
-            raise KVError(f"File system write failed: {e}") from e
-        except ValueError as e:
-            raise KVError(f"Invalid data format: {e}") from e
+            raise KVError(f"Disk write failed: {e}") from e
 
     def get(self, key: str) -> Optional[str]:
-        """Retrieve value for a key, if it exists."""
+        """
+        Retrieve a value for the given key.
+
+        Args:
+            key (str): The key to retrieve.
+        Returns:
+            Optional[str]: The corresponding value or None if not found.
+        """
         for k, v in self.index:
             if k == key:
                 return v
         return None
 
 
-def _parse_command(line: str) -> Tuple[str, List[str]]:
-    """Split a CLI input into command and arguments."""
-    parts = line.strip().split()
-    if not parts:
-        return "", []
-    return parts[0].upper(), parts[1:]
+def parse_and_execute(store: KeyValueStore, line: str) -> bool:
+    """
+    Parse a single command line and execute the corresponding action.
+
+    Args:
+        store (KeyValueStore): The key-value store instance.
+        line (str): The raw input command.
+
+    Returns:
+        bool: False if EXIT command is given, True otherwise.
+    """
+    cmd, *args = line.strip().split(maxsplit=2)
+    cmd = cmd.upper() if cmd else ""
+
+    if cmd == "SET":
+        if len(args) != 2:
+            print("ERR: Usage SET <key> <value>", flush=True)
+            return True
+        store.set(args[0], args[1])
+
+    elif cmd == "GET":
+        if len(args) != 1:
+            print("ERR: Usage GET <key>", flush=True)
+            return True
+        val = store.get(args[0])
+        print(val if val is not None else "NULL", flush=True)
+
+    elif cmd == "EXIT":
+        print("BYE", flush=True)
+        return False
+
+    elif cmd:
+        print(f"ERR: Unknown command '{cmd}'", flush=True)
+
+    return True
 
 
 def main() -> None:
-    """Run the interactive key-value store."""
+    """Main interactive loop for the key-value store."""
     logging.basicConfig(
         filename=LOG_FILE,
         level=logging.INFO,
@@ -101,6 +135,7 @@ def main() -> None:
     )
 
     store = KeyValueStore()
+    print("> Welcome to the KV Store (type EXIT to quit)", flush=True)
 
     while True:
         try:
@@ -109,35 +144,16 @@ def main() -> None:
             line = sys.stdin.readline()
             if not line:
                 break
-
-            cmd, args = _parse_command(line)
-            if cmd == "SET":
-                if len(args) != 2:
-                    print("ERR: Usage SET <key> <value>", flush=True)
-                    continue
-                store.set(args[0], args[1])
-
-            elif cmd == "GET":
-                if len(args) != 1:
-                    print("ERR: Usage GET <key>", flush=True)
-                    continue
-                val = store.get(args[0])
-                print(val if val is not None else "NULL", flush=True)
-
-            elif cmd == "EXIT":
-                print("BYE", flush=True)
+            if not parse_and_execute(store, line):
                 break
-
-            elif cmd:
-                print(f"ERR: Unknown command '{cmd}'", flush=True)
-
         except KVError as e:
-            logging.error(str(e))
+            logging.error(f"KVError: {e}")
             print(f"ERR: {e}", flush=True)
         except KeyboardInterrupt:
             print("\nBYE", flush=True)
             break
         except (OSError, ValueError) as e:
+            logging.error(f"System error: {e}")
             print(f"ERR: System error - {e}", flush=True)
         finally:
             sys.stdout.flush()
