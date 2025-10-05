@@ -2,3 +2,7 @@ data.db
 kvstore.log
 __pycache__/
 *.pyc
+data.db
+kvstore.log
+__pycache__/
+*.pyc
