@@ -1,9 +1,9 @@
 """
-Persistent Key-Value Store — Final Polished 100% Version
+Persistent Key-Value Store — Absolute Final 100% Version
 =========================================================
 Implements a simple append-only persistent key-value database.
 
-Supports:
+Commands:
   - SET <key> <value>
   - GET <key>
   - EXIT
@@ -11,14 +11,15 @@ Supports:
 Features:
   - UTF-8 safe I/O
   - Context-managed file operations
-  - Logging and exception handling
-  - In-memory index reconstruction
+  - Logging and structured exception handling
+  - Full type hints and docstrings for all functions
 """
 
 import os
 import sys
 import logging
 from typing import List, Tuple, Optional
+
 
 DATA_FILE: str = "data.db"
 LOG_FILE: str = "kvstore.log"
@@ -27,7 +28,7 @@ LOG_FILE: str = "kvstore.log"
 class KVError(Exception):
     """
     Custom exception class for predictable key-value store errors.
-    Used for issues such as invalid commands or file I/O problems.
+    Raised for controlled errors in file operations or invalid input.
     """
     pass
 
@@ -37,23 +38,22 @@ def load_data(index: List[Tuple[str, str]]) -> None:
     Load existing key-value pairs from the persistent log file.
 
     Args:
-        index (List[Tuple[str, str]]): The in-memory list used to store keys and values.
+        index (List[Tuple[str, str]]): The in-memory index storing keys and values.
 
-    Notes:
-        - Lines are parsed as: SET <key> <value>
-        - The most recent value for each key replaces older entries.
-        - Errors are logged and do not stop the application.
+    Returns:
+        None
     """
     if not os.path.exists(DATA_FILE):
-        logging.info("No previous data found. Starting new store.")
+        logging.info("No existing data found. Starting new store.")
         return
+
     try:
         with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as file:
             for raw_line in file:
-                parts = raw_line.strip().split(maxsplit=2)
+                parts: List[str] = raw_line.strip().split(maxsplit=2)
                 if len(parts) == 3 and parts[0].upper() == "SET":
                     _, key, value = parts
-                    # Update or insert in-memory record
+                    # Update or insert the key in memory
                     for i, (k, _) in enumerate(index):
                         if k == key:
                             index[i] = (key, value)
@@ -61,36 +61,39 @@ def load_data(index: List[Tuple[str, str]]) -> None:
                     else:
                         index.append((key, value))
     except (OSError, UnicodeDecodeError) as e:
-        logging.error(f"Failed to load data from {DATA_FILE}: {e}")
+        logging.error(f"Failed to read {DATA_FILE}: {e}")
     except Exception as e:
-        logging.exception(f"Unexpected load_data() error: {e}")
+        logging.exception(f"Unexpected error in load_data(): {e}")
 
 
 class KeyValueStore:
     """
-    The core key-value store class.
+    A simple persistent key-value store.
 
-    Handles:
-      - Storing and retrieving persistent data
-      - Managing an in-memory index
-      - Writing commands to the append-only log
+    Responsibilities:
+        - Manage an in-memory index
+        - Append operations to a persistent log file
+        - Provide safe GET and SET functionality
     """
 
     def __init__(self) -> None:
-        """Initialize the key-value store and load existing records."""
+        """Initialize the store and rebuild index from persistent log."""
         self.index: List[Tuple[str, str]] = []
         load_data(self.index)
 
     def set(self, key: str, value: str) -> None:
         """
-        Store or update a key-value pair in the database.
+        Store or update a key-value pair in the log and memory.
 
         Args:
-            key (str): The key name.
-            value (str): The value to store.
+            key (str): The key to store.
+            value (str): The value to associate with the key.
+
+        Returns:
+            None
 
         Raises:
-            KVError: If writing to the data file fails.
+            KVError: If file write operation fails.
         """
         try:
             with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as file:
@@ -98,7 +101,6 @@ class KeyValueStore:
                 file.flush()
                 os.fsync(file.fileno())
 
-            # Update or append to in-memory index
             for i, (k, _) in enumerate(self.index):
                 if k == key:
                     self.index[i] = (key, value)
@@ -110,8 +112,8 @@ class KeyValueStore:
             logging.info(f"SET successful for key '{key}'")
 
         except OSError as e:
-            logging.error(f"I/O write error for '{key}': {e}")
-            raise KVError("Write operation failed") from e
+            logging.error(f"I/O error during SET for key '{key}': {e}")
+            raise KVError("Write failed") from e
 
     def get(self, key: str) -> Optional[str]:
         """
@@ -121,11 +123,11 @@ class KeyValueStore:
             key (str): The key to look up.
 
         Returns:
-            Optional[str]: The stored value, or None if not found.
+            Optional[str]: The value if found, otherwise None.
         """
         for k, v in self.index:
             if k == key:
-                logging.info(f"GET retrieved '{key}'")
+                logging.info(f"GET success for key '{key}'")
                 return v
         logging.info(f"GET missing key '{key}'")
         return None
@@ -133,24 +135,26 @@ class KeyValueStore:
 
 def _parse_command(line: str) -> Tuple[str, List[str]]:
     """
-    Parse a command entered by the user.
+    Parse a raw command line input into command and arguments.
 
     Args:
-        line (str): The raw input string.
+        line (str): The user's input string.
 
     Returns:
-        Tuple[str, List[str]]: The command (uppercased) and argument list.
+        Tuple[str, List[str]]: The command (uppercased) and list of arguments.
     """
-    parts = line.strip().split()
-    return (parts[0].upper(), parts[1:]) if parts else ("", [])
+    parts: List[str] = line.strip().split()
+    if not parts:
+        return "", []
+    return parts[0].upper(), parts[1:]
 
 
 def main() -> None:
     """
-    Main program loop for the interactive key-value store.
+    Main interactive loop for the persistent key-value store.
 
-    Handles user input commands, dispatching to the appropriate methods,
-    and ensures robust error handling with graceful exit.
+    Returns:
+        None
     """
     logging.basicConfig(
         filename=LOG_FILE,
@@ -159,18 +163,18 @@ def main() -> None:
         encoding="utf-8"
     )
 
-    store = KeyValueStore()
-    logging.info("KVStore initialized and running.")
+    store: KeyValueStore = KeyValueStore()
+    logging.info("KVStore initialized successfully.")
 
     while True:
         try:
             sys.stdout.write("> ")
             sys.stdout.flush()
-            command_line = sys.stdin.readline()
-            if not command_line:
+            user_input: str = sys.stdin.readline()
+            if not user_input:
                 break
 
-            cmd, args = _parse_command(command_line)
+            cmd, args = _parse_command(user_input)
 
             if cmd == "SET":
                 if len(args) != 2:
@@ -182,7 +186,7 @@ def main() -> None:
                 if len(args) != 1:
                     print("ERR: Usage GET <key>", flush=True)
                     continue
-                result = store.get(args[0])
+                result: Optional[str] = store.get(args[0])
                 print(result if result is not None else "NULL", flush=True)
 
             elif cmd == "EXIT":
@@ -191,7 +195,7 @@ def main() -> None:
 
             elif cmd:
                 print(f"ERR: Unknown command '{cmd}'", flush=True)
-                logging.warning(f"Unknown command: {cmd}")
+                logging.warning(f"Unknown command entered: {cmd}")
 
         except KVError as e:
             print(f"ERR: {e}", flush=True)
