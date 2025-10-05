@@ -25,7 +25,7 @@ def load_data(index: List[Tuple[str, str]]) -> None:
         index (List[Tuple[str, str]]): The in-memory list holding key-value pairs.
 
     This function reconstructs the in-memory index by replaying the log file.
-    Lines with invalid formats or encoding errors are skipped safely.
+    It logs detailed error information if any exceptions occur during loading.
     """
     if not os.path.exists(DATA_FILE):
         return
@@ -48,8 +48,11 @@ def load_data(index: List[Tuple[str, str]]) -> None:
                         index.append((key, value))
     except (OSError, UnicodeDecodeError) as e:
         logging.error(f"Error loading {DATA_FILE}: {e}", exc_info=True)
+        raise KVError(f"File read failed: {e}")
     except Exception as e:
-        raise KVError(f"Unexpected error loading data: {e}")
+        # Explicitly log and rethrow unexpected errors
+        logging.critical(f"Unexpected error during load_data: {e}", exc_info=True)
+        raise KVError(f"Unexpected load error: {e}") from e
 
 
 class KeyValueStore:
@@ -61,9 +64,12 @@ class KeyValueStore:
     """
 
     def __init__(self) -> None:
-        """Initialize the in-memory index and load previous persisted data."""
+        """Initialize the in-memory index and load previously persisted data."""
         self.index: List[Tuple[str, str]] = []
-        load_data(self.index)
+        try:
+            load_data(self.index)
+        except KVError as e:
+            logging.error(f"Initialization warning: {e}")
 
     def set(self, key: str, value: str) -> None:
         """
@@ -82,7 +88,6 @@ class KeyValueStore:
                 f.flush()
                 os.fsync(f.fileno())
 
-            # Update memory
             for i, (k, _) in enumerate(self.index):
                 if k == key:
                     self.index[i] = (key, value)
@@ -91,10 +96,13 @@ class KeyValueStore:
                 self.index.append((key, value))
 
             print("OK", flush=True)
-            logging.info(f"SET command executed successfully for key: {key}")
+            logging.info(f"SET successful: key={key}")
         except (OSError, ValueError) as e:
             logging.error(f"SET failed for key={key}: {e}", exc_info=True)
             raise KVError(f"SET failed: {e}")
+        except Exception as e:
+            logging.critical(f"Unexpected SET error for key={key}: {e}", exc_info=True)
+            raise KVError(f"Unexpected SET error: {e}") from e
 
     def get(self, key: str) -> Optional[str]:
         """
@@ -108,9 +116,9 @@ class KeyValueStore:
         """
         for k, v in self.index:
             if k == key:
-                logging.info(f"GET command returned value for key: {key}")
+                logging.info(f"GET success: key={key}")
                 return v
-        logging.warning(f"GET command: key '{key}' not found.")
+        logging.warning(f"GET: key '{key}' not found.")
         return None
 
 
@@ -134,7 +142,7 @@ def main() -> None:
     """
     Run the interactive command-line key-value store interface.
 
-    Accepts and executes the following commands:
+    Supports:
       - SET <key> <value>
       - GET <key>
       - EXIT
@@ -180,7 +188,7 @@ def main() -> None:
             print("\nBYE", flush=True)
             break
         except Exception as e:
-            logging.error(f"Unexpected error: {e}", exc_info=True)
+            logging.critical(f"Unhandled error: {e}", exc_info=True)
             print(f"ERR: Unexpected error occurred: {e}", flush=True)
         finally:
             sys.stdout.flush()
