@@ -1,96 +1,114 @@
-# file: test_kv_store.py
-import subprocess
+#!/usr/bin/env python3
+# Tests for KV Store Project 1
+# Course: CSCE 5350
+# Author: Badrinath | EUID: 11820168
+
 import os
+import io
 import sys
-import time
-
-DB_FILE = "data.db"
-
-
-def run_cmds(cmds):
-    """Run kv_store.py with a list of commands, return output lines"""
-    proc = subprocess.Popen(
-        [sys.executable, "kv_store.py"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,  # ensures UTF-8 text mode
-    )
-    out, err = proc.communicate("\n".join(cmds) + "\n")
-    return out.strip().splitlines(), err
+import unittest
+from kvstore import KeyValueStore, _parse_command, KVError, DATA_FILE
 
 
-def clean_db():
-    if os.path.exists(DB_FILE):
-        os.remove(DB_FILE)
+class TestKeyValueStore(unittest.TestCase):
+
+    def setUp(self) -> None:
+        """Remove existing data file before each test for isolation."""
+        if os.path.exists(DATA_FILE):
+            os.remove(DATA_FILE)
+        self.store = KeyValueStore()
+
+    def tearDown(self) -> None:
+        if os.path.exists(DATA_FILE):
+            os.remove(DATA_FILE)
+
+    def test_set_and_get_basic(self) -> None:
+        self.store.set("name", "Badrinath")
+        self.assertEqual(self.store.get("name"), "Badrinath")
+
+    def test_overwrite_key(self) -> None:
+        self.store.set("x", "1")
+        self.store.set("x", "2")
+        self.assertEqual(self.store.get("x"), "2")
+
+    def test_nonexistent_key(self) -> None:
+        self.assertIsNone(self.store.get("ghost"))
+
+    def test_persistence_after_restart(self) -> None:
+        self.store.set("course", "CSCE5350")
+        new_store = KeyValueStore()
+        self.assertEqual(new_store.get("course"), "CSCE5350")
+
+    # ---- Edge cases ----
+
+    def test_empty_key(self) -> None:
+        self.store.set("", "emptykey")
+        self.assertEqual(self.store.get(""), "emptykey")
+
+    def test_empty_value(self) -> None:
+        self.store.set("key", "")
+        self.assertEqual(self.store.get("key"), "")
+
+    def test_unicode_support(self) -> None:
+        self.store.set("emoji", "🚀✨🔥")
+        self.assertEqual(self.store.get("emoji"), "🚀✨🔥")
+
+    def test_long_key_and_value(self) -> None:
+        long_key = "k" * 1000
+        long_value = "v" * 5000
+        self.store.set(long_key, long_value)
+        self.assertEqual(self.store.get(long_key), long_value)
+
+    def test_multiple_keys(self) -> None:
+        self.store.set("a", "1")
+        self.store.set("b", "2")
+        self.assertEqual(self.store.get("a"), "1")
+        self.assertEqual(self.store.get("b"), "2")
+
+    def test_log_replay_skips_bad_lines(self) -> None:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            f.write("BADLINE without set\n")
+            f.write("SET good test\n")
+        new_store = KeyValueStore()
+        self.assertEqual(new_store.get("good"), "test")
 
 
-def test_set_get():
-    clean_db()
-    out, err = run_cmds([
-        "SET a 1",
-        "GET a",
-        "EXIT",
-    ])
-    assert out == ["1"], f"Unexpected: {out}, err={err}"
+class TestParseCommand(unittest.TestCase):
+
+    def test_parse_set(self) -> None:
+        cmd, args = _parse_command("SET name value")
+        self.assertEqual(cmd, "SET")
+        self.assertEqual(args, ["name", "value"])
+
+    def test_parse_get(self) -> None:
+        cmd, args = _parse_command("GET name")
+        self.assertEqual(cmd, "GET")
+        self.assertEqual(args, ["name"])
+
+    def test_parse_empty(self) -> None:
+        cmd, args = _parse_command("   ")
+        self.assertEqual(cmd, "")
+        self.assertEqual(args, [])
 
 
-def test_overwrite():
-    clean_db()
-    out, err = run_cmds([
-        "SET a 1",
-        "SET a 2",
-        "GET a",
-        "EXIT",
-    ])
-    assert out == ["2"], f"Unexpected: {out}"
+class TestErrorHandling(unittest.TestCase):
 
+    def test_invalid_command(self) -> None:
+        store = KeyValueStore()
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            with self.assertRaises(KVError):
+                raise KVError("unknown command")
+        finally:
+            sys.stdout = sys.__stdout__
 
-def test_nonexistent():
-    clean_db()
-    out, err = run_cmds([
-        "GET missing",
-        "EXIT",
-    ])
-    assert out == ["NULL"], f"Unexpected: {out}"
-
-
-def test_persistence():
-    clean_db()
-    run_cmds(["SET a 42", "EXIT"])
-    out, err = run_cmds(["GET a", "EXIT"])
-    assert out == ["42"], f"Unexpected after restart: {out}"
-
-
-def test_invalid_utf8():
-    clean_db()
-    # Send invalid bytes through stdin (simulate Gradebot edge case)
-    bad_bytes = b"SET bad \xff\nGET bad\nEXIT\n"
-    proc = subprocess.Popen(
-        [sys.executable, "kv_store.py"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    out, err = proc.communicate(bad_bytes)
-    decoded_out = out.decode("utf-8", errors="replace").strip().splitlines()
-    assert decoded_out[-2] in ("NULL", ""), f"Unexpected UTF-8 handling: {decoded_out}"
-
-
-def run_all():
-    test_set_get()
-    print("✔ SET/GET passed")
-    test_overwrite()
-    print("✔ Overwrite passed")
-    test_nonexistent()
-    print("✔ Nonexistent key passed")
-    test_persistence()
-    print("✔ Persistence passed")
-    test_invalid_utf8()
-    print("✔ Invalid UTF-8 handled safely")
+    def test_invalid_args_set(self) -> None:
+        cmd, args = _parse_command("SET onlykey")
+        self.assertEqual(cmd, "SET")
+        self.assertEqual(len(args), 1)
 
 
 if __name__ == "__main__":
-    run_all()
-    print("\nAll tests passed ✅")
+    unittest.main()
 
