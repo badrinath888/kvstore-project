@@ -1,9 +1,4 @@
 data.db
-__pycache__/
-*.pyc
-
-gradebot
-data.db
 kvstore.log
 __pycache__/
 *.pyc
