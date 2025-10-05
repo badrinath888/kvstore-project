@@ -26,11 +26,7 @@ The program is completely CLI-based and demonstrates how real databases ensure c
 
 ## ⚙️ Installation & Setup
 
-1. Clone the repository and enter the project:
-```bash
-git clone https://github.com/badrinath888/kvstore-project.git
-cd kvstore-project
-
-## Gradebot Result (Project 1)
-
-![Gradebot Rubric](gradebot_screenshot.png)
+1. **Clone the repository and enter the project:**
+   ```bash
+   git clone https://github.com/badrinath888/kvstore-project.git
+   cd kvstore-project
