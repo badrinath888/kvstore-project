@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 
 gradebot
+data.db
+kvstore.log
+__pycache__/
+*.pyc
+*.png
