@@ -11,21 +11,19 @@ LOG_FILE: str = "kvstore.log"
 class KVError(Exception):
     """
     Custom exception for key-value store errors.
-
-    Raised when file I/O, command processing, or validation fails.
+    Raised for any controlled application-level failure (I/O, parsing, etc.).
     """
     pass
 
 
 def load_data(index: List[Tuple[str, str]]) -> None:
     """
-    Load key-value pairs from the persistent append-only data file.
+    Load key-value pairs from persistent storage into memory.
 
     Args:
-        index (List[Tuple[str, str]]): The in-memory list holding key-value pairs.
+        index (List[Tuple[str, str]]): In-memory storage list of key-value pairs.
 
-    This function reconstructs the in-memory index by replaying the log file.
-    It logs detailed error information if any exceptions occur during loading.
+    The function replays the append-only log file to rebuild the store.
     """
     if not os.path.exists(DATA_FILE):
         return
@@ -33,13 +31,13 @@ def load_data(index: List[Tuple[str, str]]) -> None:
     try:
         with open(DATA_FILE, "r", encoding="utf-8", errors="replace") as f:
             for raw in f:
-                line: str = raw.strip()
+                line = raw.strip()
                 if not line:
                     continue
-                parts: List[str] = line.split(maxsplit=2)
+                parts = line.split(maxsplit=2)
                 if len(parts) == 3 and parts[0].upper() == "SET":
                     _, key, value = parts
-                    # Update or append key-value pair
+                    # Update if key exists, else append new pair
                     for i, (k, _) in enumerate(index):
                         if k == key:
                             index[i] = (key, value)
@@ -47,41 +45,27 @@ def load_data(index: List[Tuple[str, str]]) -> None:
                     else:
                         index.append((key, value))
     except (OSError, UnicodeDecodeError) as e:
-        logging.error(f"Error loading {DATA_FILE}: {e}", exc_info=True)
-        raise KVError(f"File read failed: {e}")
+        logging.error(f"File read error: {e}", exc_info=True)
+        raise KVError(f"Failed to load data: {e}")
     except Exception as e:
-        # Explicitly log and rethrow unexpected errors
-        logging.critical(f"Unexpected error during load_data: {e}", exc_info=True)
+        # Catch unexpected issues, but still log for debugging
+        logging.critical(f"Unexpected load error: {e}", exc_info=True)
         raise KVError(f"Unexpected load error: {e}") from e
 
 
 class KeyValueStore:
-    """
-    A simple persistent key-value store.
-
-    Supports SET, GET, and EXIT commands via a command-line interface (CLI).
-    Data persists across sessions using an append-only log file.
-    """
+    """Simple persistent key-value store supporting SET and GET commands."""
 
     def __init__(self) -> None:
-        """Initialize the in-memory index and load previously persisted data."""
+        """Initialize memory index and load any existing data."""
         self.index: List[Tuple[str, str]] = []
         try:
             load_data(self.index)
         except KVError as e:
-            logging.error(f"Initialization warning: {e}")
+            logging.warning(f"Initialization issue: {e}")
 
     def set(self, key: str, value: str) -> None:
-        """
-        Store a key-value pair persistently and update the in-memory index.
-
-        Args:
-            key (str): The key to store.
-            value (str): The value to associate with the key.
-
-        Raises:
-            KVError: If writing to the data file fails.
-        """
+        """Persist a key-value pair and update the in-memory index."""
         try:
             with open(DATA_FILE, "a", encoding="utf-8", errors="replace") as f:
                 f.write(f"SET {key} {value}\n")
@@ -96,53 +80,46 @@ class KeyValueStore:
                 self.index.append((key, value))
 
             print("OK", flush=True)
-            logging.info(f"SET successful: key={key}")
+            logging.info(f"SET successful for key={key}")
         except (OSError, ValueError) as e:
             logging.error(f"SET failed for key={key}: {e}", exc_info=True)
             raise KVError(f"SET failed: {e}")
         except Exception as e:
-            logging.critical(f"Unexpected SET error for key={key}: {e}", exc_info=True)
-            raise KVError(f"Unexpected SET error: {e}") from e
+            logging.critical(f"Unexpected error on SET: {e}", exc_info=True)
+            raise KVError(f"Unexpected error on SET: {e}") from e
 
     def get(self, key: str) -> Optional[str]:
-        """
-        Retrieve the value associated with a given key.
-
-        Args:
-            key (str): The key to search for.
-
-        Returns:
-            Optional[str]: The stored value, or None if not found.
-        """
+        """Retrieve value for a given key if it exists."""
         for k, v in self.index:
             if k == key:
-                logging.info(f"GET success: key={key}")
+                logging.debug(f"GET success: key={key}")
                 return v
-        logging.warning(f"GET: key '{key}' not found.")
+        logging.warning(f"GET: key not found: {key}")
         return None
 
 
 def _parse_command(line: str) -> Tuple[str, List[str]]:
     """
-    Parse a user input line into a command and list of arguments.
-
-    Args:
-        line (str): Raw input string from the user.
-
-    Returns:
-        Tuple[str, List[str]]: The parsed command and its arguments.
+    Parse user input into command and argument list.
+    Handles excessive whitespace or invalid input gracefully.
     """
-    parts = line.strip().split()
-    if not parts:
+    line = line.strip()
+    if not line:
         return "", []
-    return parts[0].upper(), parts[1:]
+    parts = [p for p in line.split() if p]  # filter extra spaces
+    cmd = parts[0].upper()
+    args = parts[1:]
+
+    # Prevent unexpected long input from breaking logic
+    if len(args) > 5:
+        logging.warning(f"Command has too many arguments: {parts}")
+        args = args[:5]
+    return cmd, args
 
 
 def main() -> None:
     """
-    Run the interactive command-line key-value store interface.
-
-    Supports:
+    Run an interactive loop to accept commands:
       - SET <key> <value>
       - GET <key>
       - EXIT
@@ -157,10 +134,14 @@ def main() -> None:
             sys.stdout.write("> ")
             sys.stdout.flush()
             line = sys.stdin.readline()
+
             if not line:
                 break
 
             cmd, args = _parse_command(line)
+
+            if not cmd:
+                continue
 
             if cmd == "SET":
                 if len(args) != 2:
@@ -179,8 +160,9 @@ def main() -> None:
                 print("BYE", flush=True)
                 break
 
-            elif cmd:
+            else:
                 print(f"ERR: Unknown command '{cmd}'", flush=True)
+                logging.warning(f"Unknown command received: {cmd}")
 
         except KVError as e:
             print(f"ERR: {e}", flush=True)
