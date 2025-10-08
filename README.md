@@ -53,6 +53,3 @@ This is intentionally minimal to match Project 1 constraints (no built-in dict/m
 
 ---
 
-##  On-Disk Format (append-only)
-
-Each write is one line:
