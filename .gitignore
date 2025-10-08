@@ -3,3 +3,5 @@ kvstore.log
 __pycache__/
 *.pyc
 *.png
+!gradebot_screenshot.png
+
