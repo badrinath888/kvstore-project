@@ -245,33 +245,47 @@ def run_repl() -> None:
             if cmd == "EXIT":
                 break
             if cmd == "SET" and len(args) == 2:
-                store.set(*args); print("OK"); continue
+                store.set(*args)
+                print("OK")
+                continue
             if cmd == "GET" and len(args) == 1:
                 val = store.get(args[0])
-                print("" if val == "" else (val if val else "nil")); continue
+                print("" if val == "" else (val if val else "nil"))
+                continue
             if cmd == "DEL" and len(args) == 1:
-                print(store.delete(args[0])); continue
+                print(store.delete(args[0]))
+                continue
             if cmd == "EXISTS" and len(args) == 1:
-                print(store.exists(args[0])); continue
+                print(store.exists(args[0]))
+                continue
             if cmd == "MSET" and len(args) >= 2 and len(args) % 2 == 0:
-                store.mset(args); continue
+                store.mset(args)
+                continue
             if cmd == "MGET" and len(args) >= 1:
-                store.mget(args); continue
+                store.mget(args)
+                continue
             if cmd == "EXPIRE" and len(args) == 2:
-                print(store.expire(args[0], int(args[1]))); continue
+                print(store.expire(args[0], int(args[1])))
+                continue
             if cmd == "TTL" and len(args) == 1:
-                print(store.ttl_cmd(args[0])); continue
+                print(store.ttl_cmd(args[0]))
+                continue
             if cmd == "PERSIST" and len(args) == 1:
-                print(store.persist(args[0])); continue
+                print(store.persist(args[0]))
+                continue
             if cmd == "RANGE":
                 start, end = (args + ["", ""])[:2]
-                store.range_cmd(start, end); continue
+                store.range_cmd(start, end)
+                continue
             if cmd == "BEGIN":
-                store.begin(); continue
+                store.begin()
+                continue
             if cmd == "COMMIT":
-                store.commit(); continue
+                store.commit()
+                continue
             if cmd == "ABORT":
-                store.abort(); continue
+                store.abort()
+                continue
             print("ERR unknown or invalid command")
         except Exception as e:
             print(f"ERR {e}")
@@ -287,4 +301,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-
