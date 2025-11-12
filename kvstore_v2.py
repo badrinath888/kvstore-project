@@ -75,11 +75,14 @@ class KeyValueStore:
             os.fsync(f.fileno())
 
     # ----- TTL -----
-    def _is_expired(self, key: str) -> bool:
+        def _is_expired(self, key: str) -> bool:
+        """Check if key is expired (strict > comparison)."""
         exp = self.ttl.get(key)
         if exp is None:
             return False
-        if current_time_ms() >= exp:
+        # Only expire if strictly later than the expiry moment
+        now = current_time_ms()
+        if now > exp:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
