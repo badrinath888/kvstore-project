@@ -151,12 +151,15 @@ class KeyValueStore:
             print(val if val is not None else "nil")
 
     # ----- TTL commands -----
-    def expire(self, key: str, ms: int) -> int:
-        if self.exists(key):
-            self.ttl[key] = current_time_ms() + ms
-            if not self.in_txn:
-                self._append_log(f"EXPIRE {key} {self.ttl[key]}")
-            return 1
+        def expire(self, key: str, ms: int) -> int:
+        """Set TTL in milliseconds for an existing key."""
+        # check if the key is currently in memory
+        for k, _ in self.index:
+            if k == key and not self._is_expired(k):
+                self.ttl[key] = current_time_ms() + ms
+                if not self.in_txn:
+                    self._append_log(f"EXPIRE {key} {self.ttl[key]}")
+                return 1
         return 0
 
     def ttl_cmd(self, key: str) -> int:
