@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 # KV Store Project 2 – Transactions, TTL, Range, Multi-Ops
-# CSCE 5350 | Author : Badrinath | EUID : 11820168
+# CSCE 5350 | Author: Badrinath | EUID: 11820168
+#
+# Implements:
+# • SET / GET / DEL / EXISTS
+# • MSET / MGET
+# • EXPIRE / TTL / PERSIST (TTL in ms)
+# • RANGE <start> <end>
+# • BEGIN / COMMIT / ABORT
+# • Append-only persistence (data.db)
 
 import os, sys, time, bisect, logging
 from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
 LOG_FILE = "kvstore.log"
-
 
 # ---------- Utility ----------
 def current_time_ms() -> int:
@@ -23,14 +30,14 @@ def setup_logging() -> None:
 
 
 # ---------- Helpers ----------
-def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str]) -> None:
-    """Update or append (key,value) while keeping list sorted."""
+def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
+    """Update or append (key,value) pair."""
     for i, (k, _) in enumerate(index):
         if k == key:
             index[i] = (key, value)
             return
-    # Append instead of bisect.insort to avoid order issues during replay
     index.append((key, value))
+
 
 def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
     before = len(index)
@@ -49,6 +56,7 @@ class KeyValueStore:
 
     # ----- Persistence -----
     def load(self) -> None:
+        """Replay append-only log."""
         if not os.path.exists(DATA_FILE):
             return
         try:
@@ -70,18 +78,18 @@ class KeyValueStore:
             logging.error("Replay failed: %s", e)
 
     def _append_log(self, line: str) -> None:
+        """Append command to log."""
         with open(DATA_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
             f.flush()
             os.fsync(f.fileno())
 
     # ----- TTL -----
-        def _is_expired(self, key: str) -> bool:
-        """Check if key is expired (strict > comparison)."""
+    def _is_expired(self, key: str) -> bool:
+        """Check if key is expired; delete if so."""
         exp = self.ttl.get(key)
         if exp is None:
             return False
-        # Only expire if strictly later than the expiry moment
         now = current_time_ms()
         if now > exp:
             _delete_in_memory(self.index, key)
@@ -90,7 +98,7 @@ class KeyValueStore:
         return False
 
     # ----- Core Commands -----
-        def set(self, key: str, value: str) -> None:
+    def set(self, key: str, value: str) -> None:
         """Store or update a key/value."""
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
@@ -99,25 +107,23 @@ class KeyValueStore:
         self._append_log(f"SET {key} {value}")
         logging.info("SET %r %r", key, value)
 
-        def set(self, key: str, value: str) -> None:
-        """Store or update a key/value."""
-        # Transaction buffering
+    def get(self, key: str) -> Optional[str]:
+        """Return value or None."""
+        if self._is_expired(key):
+            return None
         if self.in_txn:
-            self.txn_buffer.append(("SET", [key, value]))
-            return
-
-        # Immediately update in-memory index
-        _set_in_memory(self.index, key, value)
-
-        # Persist to append-only log
-        try:
-            self._append_log(f"SET {key} {value}")
-            logging.info("SET %r %r", key, value)
-        except Exception as e:
-            logging.error("Write failed: %s", e)
-            raise
+            for cmd, args in reversed(self.txn_buffer):
+                if cmd == "SET" and args[0] == key:
+                    return args[1]
+                if cmd == "DEL" and args[0] == key:
+                    return None
+        for k, v in self.index:
+            if k == key:
+                return v
+        return None
 
     def delete(self, key: str) -> int:
+        """Delete key and its TTL."""
         if self._is_expired(key):
             return 0
         if self.in_txn:
@@ -130,6 +136,7 @@ class KeyValueStore:
         return 1 if removed else 0
 
     def exists(self, key: str) -> int:
+        """Return 1 if present and not expired."""
         if self._is_expired(key):
             return 0
         for k, _ in self.index:
@@ -148,31 +155,30 @@ class KeyValueStore:
             val = self.get(k)
             print(val if val is not None else "nil")
 
-    # ----- TTL commands -----
-        def expire(self, key: str, ms: int) -> int:
-        """Set TTL in ms if key exists and not expired."""
-        for k, _ in self.index:
-            if k == key and not self._is_expired(k):
-                expire_at = current_time_ms() + int(ms)
-                self.ttl[key] = expire_at
-                if not self.in_txn:
-                    self._append_log(f"EXPIRE {key} {expire_at}")
-                return 1
-        return 0
+    # ----- TTL Commands -----
+    def expire(self, key: str, ms: int) -> int:
+        """Set TTL (ms from now) if key exists."""
+        if not self.exists(key):
+            return 0
+        expire_at = current_time_ms() + max(0, int(ms))
+        self.ttl[key] = expire_at
+        if not self.in_txn:
+            self._append_log(f"EXPIRE {key} {expire_at}")
+        return 1
 
-      def ttl_cmd(self, key: str) -> int:
-        """Return remaining TTL in ms, or -1/-2 per spec."""
+    def ttl_cmd(self, key: str) -> int:
+        """Return remaining TTL in ms; -1=no TTL; -2=missing/expired."""
         if key not in self.ttl:
             return -1 if self.exists(key) else -2
         remaining = self.ttl[key] - current_time_ms()
         if remaining <= 0:
-            # expire now
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return -2
         return remaining
 
     def persist(self, key: str) -> int:
+        """Remove TTL but keep value."""
         if key in self.ttl:
             del self.ttl[key]
             if not self.in_txn:
@@ -182,6 +188,7 @@ class KeyValueStore:
 
     # ----- RANGE -----
     def range_cmd(self, start: str, end: str) -> None:
+        """List keys lexicographically between bounds."""
         keys = sorted(k for k, _ in self.index if not self._is_expired(k))
         for k in keys:
             if (not start or k >= start) and (not end or k <= end):
@@ -215,8 +222,9 @@ class KeyValueStore:
                 self._append_log(f"DEL {args[0]}")
             elif cmd == "EXPIRE":
                 key, ms = args
-                self.ttl[key] = current_time_ms() + int(ms)
-                self._append_log(f"EXPIRE {key} {self.ttl[key]}")
+                expire_at = current_time_ms() + int(ms)
+                self.ttl[key] = expire_at
+                self._append_log(f"EXPIRE {key} {expire_at}")
         self.txn_buffer.clear()
         self.in_txn = False
         print("OK")
@@ -307,4 +315,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
 
