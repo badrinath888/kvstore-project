@@ -151,12 +151,17 @@ class KeyValueStore:
                 return 1
         return 0
 
-    def ttl_cmd(self, key: str) -> int:
-        if self._is_expired(key):
-            return -2
+      def ttl_cmd(self, key: str) -> int:
+        """Return remaining TTL in ms, or -1/-2 per spec."""
         if key not in self.ttl:
             return -1 if self.exists(key) else -2
-        return self.ttl[key] - current_time_ms()
+        remaining = self.ttl[key] - current_time_ms()
+        if remaining <= 0:
+            # expire now
+            _delete_in_memory(self.index, key)
+            self.ttl.pop(key, None)
+            return -2
+        return remaining
 
     def persist(self, key: str) -> int:
         if key in self.ttl:
