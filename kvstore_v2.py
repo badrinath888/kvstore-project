@@ -18,6 +18,7 @@ LOG_FILE = "kvstore.log"
 
 # ---------- Utility ----------
 def current_time_ms() -> int:
+    """Return current time in milliseconds."""
     return int(time.time() * 1000)
 
 
@@ -31,7 +32,7 @@ def setup_logging() -> None:
 
 # ---------- Helpers ----------
 def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
-    """Update or append (key,value) pair."""
+    """Update or append (key, value) pair."""
     for i, (k, _) in enumerate(index):
         if k == key:
             index[i] = (key, value)
@@ -40,6 +41,7 @@ def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
 
 
 def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
+    """Delete a key from in-memory index."""
     before = len(index)
     index[:] = [(k, v) for (k, v) in index if k != key]
     return len(index) < before
@@ -91,7 +93,7 @@ class KeyValueStore:
         if exp is None:
             return False
         now = current_time_ms()
-        if now > exp:
+        if now >= exp:  # ✅ fixed comparison
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
@@ -146,11 +148,13 @@ class KeyValueStore:
 
     # ----- Multi-Ops -----
     def mset(self, pairs: List[str]) -> None:
+        """Multi-set pairs."""
         for i in range(0, len(pairs), 2):
             self.set(pairs[i], pairs[i + 1])
         print("OK")
 
     def mget(self, keys: List[str]) -> None:
+        """Multi-get keys."""
         for k in keys:
             val = self.get(k)
             print(val if val is not None else "nil")
@@ -197,6 +201,7 @@ class KeyValueStore:
 
     # ----- Transactions -----
     def begin(self) -> None:
+        """Begin transaction."""
         if self.in_txn:
             print("ERR transaction already started")
             return
@@ -205,11 +210,13 @@ class KeyValueStore:
         print("OK")
 
     def abort(self) -> None:
+        """Abort transaction."""
         self.txn_buffer.clear()
         self.in_txn = False
         print("OK")
 
     def commit(self) -> None:
+        """Commit transaction."""
         if not self.in_txn:
             print("ERR no transaction")
             return
@@ -239,6 +246,7 @@ def _parse(line: str) -> tuple[str, list[str]]:
 
 
 def run_repl() -> None:
+    """Run interactive REPL loop."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
@@ -315,5 +323,6 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
 
 
