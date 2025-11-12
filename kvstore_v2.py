@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
 # KV Store Project 2 – Transactions, TTL, Range, Multi-Ops
-# Course: CSCE 5350
-# Author: Badrinath | EUID: 11820168
-#
-# Extends Project 1 with:
-# • DEL / EXISTS
-# • MSET / MGET
-# • EXPIRE / TTL / PERSIST (TTL in milliseconds)
-# • RANGE <start> <end> (lexicographic order)
-# • BEGIN / COMMIT / ABORT transactions
-# • Append-only persistence in data.db + replay on startup
+# CSCE 5350 | Author : Badrinath | EUID : 11820168
 
 import os, sys, time, bisect, logging
 from typing import List, Tuple, Optional
@@ -18,7 +9,7 @@ DATA_FILE = "data.db"
 LOG_FILE = "kvstore.log"
 
 
-# ---------- Utility ----------------------------------------------------------
+# ---------- Utility ----------
 def current_time_ms() -> int:
     return int(time.time() * 1000)
 
@@ -31,9 +22,8 @@ def setup_logging() -> None:
     )
 
 
-# ---------- Helpers ----------------------------------------------------------
+# ---------- Helpers ----------
 def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
-    """Maintain list-based index (no dict)."""
     for i, (k, _) in enumerate(index):
         if k == key:
             index[i] = (key, value)
@@ -47,7 +37,7 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
     return len(index) < before
 
 
-# ---------- Core Store -------------------------------------------------------
+# ---------- Core Store ----------
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
@@ -96,13 +86,11 @@ class KeyValueStore:
         return False
 
     # ----- Core Commands -----
-            def set(self, key: str, value: str) -> None:
+    def set(self, key: str, value: str) -> None:
         """Store or update a key/value."""
-        # Everything inside here must be indented exactly 8 spaces.
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
             return
-        # update in-memory list and append to log
         _set_in_memory(self.index, key, value)
         self._append_log(f"SET {key} {value}")
         logging.info("SET %r %r", key, value)
@@ -153,14 +141,13 @@ class KeyValueStore:
             print(val if val is not None else "nil")
 
     # ----- TTL commands -----
-           def expire(self, key: str, ms: int) -> int:
+    def expire(self, key: str, ms: int) -> int:
+        """Set TTL in ms if key exists and not expired."""
         for k, _ in self.index:
             if k == key and not self._is_expired(k):
-                exp_time = current_time_ms() + ms
-                print(f"# DEBUG: Setting TTL for {key} to expire at {exp_time}")
-                self.ttl[key] = exp_time
+                self.ttl[key] = current_time_ms() + ms
                 if not self.in_txn:
-                    self._append_log(f"EXPIRE {key} {exp_time}")
+                    self._append_log(f"EXPIRE {key} {self.ttl[key]}")
                 return 1
         return 0
 
@@ -221,7 +208,7 @@ class KeyValueStore:
         print("OK")
 
 
-# ---------- CLI --------------------------------------------------------------
+# ---------- CLI ----------
 def _parse(line: str) -> tuple[str, list[str]]:
     parts = line.strip().split()
     if not parts:
@@ -306,3 +293,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
