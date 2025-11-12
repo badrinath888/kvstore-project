@@ -96,11 +96,12 @@ class KeyValueStore:
         return False
 
     # ----- Core Commands -----
-    def set(self, key: str, value: str) -> None:
+        def set(self, key: str, value: str) -> None:
         """Store or update a key/value."""
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
             return
+        # update in-memory list and append to log
         _set_in_memory(self.index, key, value)
         self._append_log(f"SET {key} {value}")
         logging.info("SET %r %r", key, value)
