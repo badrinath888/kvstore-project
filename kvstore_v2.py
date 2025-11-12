@@ -99,19 +99,23 @@ class KeyValueStore:
         self._append_log(f"SET {key} {value}")
         logging.info("SET %r %r", key, value)
 
-    def get(self, key: str) -> Optional[str]:
-        if self._is_expired(key):
-            return None
+        def set(self, key: str, value: str) -> None:
+        """Store or update a key/value."""
+        # Transaction buffering
         if self.in_txn:
-            for cmd, args in reversed(self.txn_buffer):
-                if cmd == "SET" and args[0] == key:
-                    return args[1]
-                if cmd == "DEL" and args[0] == key:
-                    return None
-        for k, v in self.index:
-            if k == key:
-                return v
-        return None
+            self.txn_buffer.append(("SET", [key, value]))
+            return
+
+        # Immediately update in-memory index
+        _set_in_memory(self.index, key, value)
+
+        # Persist to append-only log
+        try:
+            self._append_log(f"SET {key} {value}")
+            logging.info("SET %r %r", key, value)
+        except Exception as e:
+            logging.error("Write failed: %s", e)
+            raise
 
     def delete(self, key: str) -> int:
         if self._is_expired(key):
