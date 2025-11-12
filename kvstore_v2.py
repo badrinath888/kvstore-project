@@ -6,8 +6,8 @@
 # Extends Project 1 with:
 # • DEL / EXISTS
 # • MSET / MGET
-# • EXPIRE / TTL / PERSIST  (TTL in milliseconds)
-# • RANGE <start> <end>  (lexicographic order)
+# • EXPIRE / TTL / PERSIST (TTL in milliseconds)
+# • RANGE <start> <end> (lexicographic order)
 # • BEGIN / COMMIT / ABORT transactions
 # • Append-only persistence in data.db + replay on startup
 
@@ -15,7 +15,7 @@ import os, sys, time, bisect, logging
 from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
-LOG_FILE  = "kvstore.log"
+LOG_FILE = "kvstore.log"
 
 
 # ---------- Utility ----------------------------------------------------------
@@ -97,6 +97,7 @@ class KeyValueStore:
 
     # ----- Core Commands -----
     def set(self, key: str, value: str) -> None:
+        """Store or update a key/value."""
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
             return
@@ -107,7 +108,6 @@ class KeyValueStore:
     def get(self, key: str) -> Optional[str]:
         if self._is_expired(key):
             return None
-        # check txn buffer first (read-your-writes)
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if cmd == "SET" and args[0] == key:
