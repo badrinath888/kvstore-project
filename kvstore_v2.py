@@ -93,7 +93,7 @@ class KeyValueStore:
         if exp is None:
             return False
         now = current_time_ms()
-        if now >= exp:  # ✅ fixed comparison
+        if now >= exp:  # ensure expiration is respected precisely
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
@@ -164,7 +164,8 @@ class KeyValueStore:
         """Set TTL (ms from now) if key exists."""
         if not self.exists(key):
             return 0
-        expire_at = current_time_ms() + max(0, int(ms))
+        # Add small buffer to avoid immediate expiration
+        expire_at = current_time_ms() + max(1, int(ms))
         self.ttl[key] = expire_at
         if not self.in_txn:
             self._append_log(f"EXPIRE {key} {expire_at}")
@@ -229,7 +230,7 @@ class KeyValueStore:
                 self._append_log(f"DEL {args[0]}")
             elif cmd == "EXPIRE":
                 key, ms = args
-                expire_at = current_time_ms() + int(ms)
+                expire_at = current_time_ms() + max(1, int(ms))
                 self.ttl[key] = expire_at
                 self._append_log(f"EXPIRE {key} {expire_at}")
         self.txn_buffer.clear()
@@ -323,6 +324,7 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
 
 
 
