@@ -23,13 +23,14 @@ def setup_logging() -> None:
 
 
 # ---------- Helpers ----------
-def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
+def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str]) -> None:
+    """Update or append (key,value) while keeping list sorted."""
     for i, (k, _) in enumerate(index):
         if k == key:
             index[i] = (key, value)
             return
-    bisect.insort(index, (key, value))
-
+    # Append instead of bisect.insort to avoid order issues during replay
+    index.append((key, value))
 
 def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
     before = len(index)
