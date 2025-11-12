@@ -96,8 +96,9 @@ class KeyValueStore:
         return False
 
     # ----- Core Commands -----
-        def set(self, key: str, value: str) -> None:
+            def set(self, key: str, value: str) -> None:
         """Store or update a key/value."""
+        # Everything inside here must be indented exactly 8 spaces.
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
             return
