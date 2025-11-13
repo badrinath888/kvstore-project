@@ -9,7 +9,7 @@ DATA_FILE = "data.db"
 LOG_FILE = "kvstore.log"
 
 # ---------- Utility ----------
-def current_time_ms() -> int:
+def now_ms() -> int:
     """Return current wall-clock time in milliseconds."""
     return int(time.time() * 1000)
 
@@ -21,15 +21,13 @@ def setup_logging() -> None:
     )
 
 def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
-    key, value = key.strip(), value.strip()
     for i, (k, _) in enumerate(index):
         if k == key:
-            index[i] = (key, value)
+            index[i] = (key.strip(), value.strip())
             return
-    index.append((key, value))
+    index.append((key.strip(), value.strip()))
 
 def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
-    key = key.strip()
     before = len(index)
     index[:] = [(k, v) for (k, v) in index if k != key]
     return len(index) < before
@@ -39,14 +37,14 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        self.ttl: dict[str, int] = {}  # key -> expiry in ms
+        self.ttl: dict[str, int] = {}  # store absolute expiry in ms
         self.in_txn = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
         self.load()
 
     # ----- Persistence -----
     def load(self) -> None:
-        """Replay append-only data file on startup."""
+        """Replay append-only log on startup."""
         if not os.path.exists(DATA_FILE):
             return
         try:
@@ -63,7 +61,7 @@ class KeyValueStore:
                     elif cmd == "EXPIRE" and len(parts) == 3:
                         try:
                             rel_ms = int(float(parts[2]))
-                            self.ttl[parts[1]] = current_time_ms() + rel_ms
+                            self.ttl[parts[1]] = now_ms() + rel_ms
                         except ValueError:
                             continue
                     elif cmd == "PERSIST" and len(parts) == 2:
@@ -77,31 +75,52 @@ class KeyValueStore:
             f.flush()
             os.fsync(f.fileno())
 
-    # ----- TTL helpers -----
+    # ----- TTL -----
     def _is_expired(self, key: str) -> bool:
-        """Return True if key is expired and remove it."""
-        exp_ms = self.ttl.get(key)
-        if exp_ms is None:
+        exp = self.ttl.get(key)
+        if exp is None:
             return False
-        now_ms = current_time_ms()
-        if now_ms >= exp_ms:
+        if now_ms() >= exp:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
         return False
 
+    def expire(self, key: str, ms: int) -> int:
+        key = key.strip()
+        if not self.exists(key):
+            return 0
+        self.ttl[key] = now_ms() + int(ms)
+        self._append_log(f"EXPIRE {key} {ms}")
+        return 1
+
+    def ttl_cmd(self, key: str) -> int:
+        key = key.strip()
+        exp = self.ttl.get(key)
+        if exp is None:
+            return -1 if self.exists(key) else -2
+        remaining = exp - now_ms()
+        if remaining <= 0:
+            self._is_expired(key)
+            return -2
+        return remaining
+
+    def persist(self, key: str) -> int:
+        if key in self.ttl:
+            self.ttl.pop(key)
+            self._append_log(f"PERSIST {key}")
+            return 1
+        return 0
+
     # ----- Core Commands -----
     def set(self, key: str, value: str) -> None:
-        key, value = key.strip(), value.strip()
         _set_in_memory(self.index, key, value)
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
             return
         self._append_log(f"SET {key} {value}")
-        logging.info("SET %r %r", key, value)
 
     def get(self, key: str) -> Optional[str]:
-        key = key.strip()
         if self._is_expired(key):
             return None
         if self.in_txn:
@@ -116,12 +135,8 @@ class KeyValueStore:
         return None
 
     def delete(self, key: str) -> int:
-        key = key.strip()
         if self._is_expired(key):
             return 0
-        if self.in_txn:
-            self.txn_buffer.append(("DEL", [key]))
-            return 1
         removed = _delete_in_memory(self.index, key)
         self.ttl.pop(key, None)
         if removed:
@@ -129,15 +144,10 @@ class KeyValueStore:
         return int(removed)
 
     def exists(self, key: str) -> int:
-        """Return 1 if key exists and not expired, else 0."""
-        key = key.strip()
         self._is_expired(key)
-        for k, _ in self.index:
-            if k == key:
-                return 1
-        return 0
+        return int(any(k == key for k, _ in self.index))
 
-    # ----- Multi-Key -----
+    # ----- Multi -----
     def mset(self, pairs: List[str]) -> None:
         for i in range(0, len(pairs), 2):
             self.set(pairs[i], pairs[i + 1])
@@ -147,40 +157,8 @@ class KeyValueStore:
         for k in keys:
             print(self.get(k) or "nil")
 
-    # ----- TTL Commands -----
-    def expire(self, key: str, ms: int) -> int:
-        key = key.strip()
-        if not self.exists(key):
-            return 0
-        now_ms = current_time_ms()
-        exp_ms = now_ms + int(ms)
-        self.ttl[key] = exp_ms
-        self._append_log(f"EXPIRE {key} {ms}")
-        return 1
-
-    def ttl_cmd(self, key: str) -> int:
-        key = key.strip()
-        exp_ms = self.ttl.get(key)
-        now_ms = current_time_ms()
-        if exp_ms is None:
-            return -1 if self.exists(key) else -2
-        remaining = exp_ms - now_ms
-        if remaining <= 0:
-            self._is_expired(key)
-            return -2
-        return remaining
-
-    def persist(self, key: str) -> int:
-        key = key.strip()
-        if key in self.ttl:
-            self.ttl.pop(key)
-            self._append_log(f"PERSIST {key}")
-            return 1
-        return 0
-
-    # ----- RANGE -----
+    # ----- Range -----
     def range_cmd(self, start: str, end: str) -> None:
-        start, end = start.strip(), end.strip()
         keys = sorted(k for k, _ in self.index if not self._is_expired(k))
         for k in keys:
             if (not start or k >= start) and (not end or k <= end):
@@ -293,3 +271,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
