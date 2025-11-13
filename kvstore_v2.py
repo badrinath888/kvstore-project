@@ -9,9 +9,9 @@ DATA_FILE = "data.db"
 LOG_FILE = "kvstore.log"
 
 # ---------- Utility ----------
-def now_s() -> float:
-    """Return current wall-clock time in seconds."""
-    return float(time.time())
+def current_time_ms() -> int:
+    """Return current wall-clock time in milliseconds."""
+    return int(time.time() * 1000)
 
 def setup_logging() -> None:
     logging.basicConfig(
@@ -34,11 +34,12 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
     index[:] = [(k, v) for (k, v) in index if k != key]
     return len(index) < before
 
+
 # ---------- Core Store ----------
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        self.ttl: dict[str, float] = {}
+        self.ttl: dict[str, int] = {}  # key -> expiry in ms
         self.in_txn = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
         self.load()
@@ -61,9 +62,8 @@ class KeyValueStore:
                         _delete_in_memory(self.index, parts[1])
                     elif cmd == "EXPIRE" and len(parts) == 3:
                         try:
-                            rel_ms = float(parts[2])
-                            # restore expiration time as relative to current time
-                            self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
+                            rel_ms = int(float(parts[2]))
+                            self.ttl[parts[1]] = current_time_ms() + rel_ms
                         except ValueError:
                             continue
                     elif cmd == "PERSIST" and len(parts) == 2:
@@ -77,12 +77,14 @@ class KeyValueStore:
             f.flush()
             os.fsync(f.fileno())
 
-    # ----- TTL -----
+    # ----- TTL helpers -----
     def _is_expired(self, key: str) -> bool:
-        exp = self.ttl.get(key)
-        if exp is None:
+        """Return True if key is expired and remove it."""
+        exp_ms = self.ttl.get(key)
+        if exp_ms is None:
             return False
-        if now_s() > float(exp):
+        now_ms = current_time_ms()
+        if now_ms >= exp_ms:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
@@ -135,7 +137,7 @@ class KeyValueStore:
                 return 1
         return 0
 
-    # ----- Multi -----
+    # ----- Multi-Key -----
     def mset(self, pairs: List[str]) -> None:
         for i in range(0, len(pairs), 2):
             self.set(pairs[i], pairs[i + 1])
@@ -150,27 +152,23 @@ class KeyValueStore:
         key = key.strip()
         if not self.exists(key):
             return 0
-        # store expiration as an absolute timestamp in SECONDS
-        expire_at = now_s() + (float(ms) / 1000.0)
-        self.ttl[key] = expire_at
+        now_ms = current_time_ms()
+        exp_ms = now_ms + int(ms)
+        self.ttl[key] = exp_ms
         self._append_log(f"EXPIRE {key} {ms}")
         return 1
 
     def ttl_cmd(self, key: str) -> int:
         key = key.strip()
-        if key not in self.ttl:
-            # -1 = exists but no TTL, -2 = does not exist
+        exp_ms = self.ttl.get(key)
+        now_ms = current_time_ms()
+        if exp_ms is None:
             return -1 if self.exists(key) else -2
-
-        exp = self.ttl[key]
-        remaining = int((exp - now_s()) * 1000)  # ms left
-
+        remaining = exp_ms - now_ms
         if remaining <= 0:
             self._is_expired(key)
             return -2
-
         return remaining
-
 
     def persist(self, key: str) -> int:
         key = key.strip()
@@ -217,6 +215,7 @@ class KeyValueStore:
         self.txn_buffer.clear()
         self.in_txn = False
         print("OK")
+
 
 # ---------- CLI ----------
 def _parse(line: str) -> tuple[str, list[str]]:
