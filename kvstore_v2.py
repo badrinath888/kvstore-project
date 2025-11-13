@@ -32,7 +32,6 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
     index[:] = [(k, v) for (k, v) in index if k != key]
     return len(index) < before
 
-
 # ---------- Core Store ----------
 class KeyValueStore:
     def __init__(self) -> None:
@@ -64,7 +63,6 @@ class KeyValueStore:
             logging.error("Replay failed: %s", e)
 
     def _append_log(self, line: str) -> None:
-        """Append a single line to data file."""
         with open(DATA_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
             f.flush()
@@ -72,7 +70,6 @@ class KeyValueStore:
 
     # ----- TTL -----
     def _is_expired(self, key: str) -> bool:
-        """Check and remove expired key."""
         exp = self.ttl.get(key)
         if exp is None:
             return False
@@ -84,10 +81,11 @@ class KeyValueStore:
 
     # ----- Core Commands -----
     def set(self, key: str, value: str) -> None:
+        """Set or update key-value pair (immediate memory + log)."""
+        _set_in_memory(self.index, key, value)
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
             return
-        _set_in_memory(self.index, key, value)
         self._append_log(f"SET {key} {value}")
         logging.info("SET %r %r", key, value)
 
@@ -134,7 +132,7 @@ class KeyValueStore:
 
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
-        """Set TTL (milliseconds). TTL is in-memory only."""
+        """Set TTL (milliseconds)."""
         if self.exists(key):
             self.ttl[key] = now_s() + (ms / 1000.0)
             return 1
@@ -193,7 +191,6 @@ class KeyValueStore:
         self.txn_buffer.clear()
         self.in_txn = False
         print("OK")
-
 
 # ---------- CLI ----------
 def _parse(line: str) -> tuple[str, list[str]]:
@@ -271,3 +268,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
