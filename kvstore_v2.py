@@ -147,15 +147,17 @@ class KeyValueStore:
         return 1
 
     def ttl_cmd(self, key: str) -> int:
-        exp = self.ttl.get(key)
-        if exp is None:
-            return -1 if any(k == key for k, _ in self.index) else -2
-        remaining = exp - now_ms()
-        if remaining <= 0:
-            _delete_in_memory(self.index, key)
-            self.ttl.pop(key, None)
-            return -2
-        return remaining
+    print("DEBUG: ttl map =", self.ttl)
+    exp = self.ttl.get(key)
+    if exp is None:
+        return -1 if any(k == key for k, _ in self.index) else -2
+    remaining = exp - now_ms()
+    if remaining <= 0:
+        _delete_in_memory(self.index, key)
+        self.ttl.pop(key, None)
+        return -2
+    return remaining
+
 
     def persist(self, key: str) -> int:
         if key in self.ttl:
