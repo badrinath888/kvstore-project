@@ -9,8 +9,9 @@ DATA_FILE = "data.db"
 LOG_FILE = "kvstore.log"
 
 
-def current_time_ms() -> int:
-    return int(time.time() * 1000)
+def now_ms() -> int:
+    """Return monotonic time in ms (safe for TTL calculations)."""
+    return int(time.monotonic() * 1000)
 
 
 def setup_logging() -> None:
@@ -38,6 +39,7 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
+        # store ttl as expire_at = now_ms() + duration
         self.ttl: dict[str, int] = {}
         self.in_txn: bool = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
@@ -60,7 +62,7 @@ class KeyValueStore:
                         _delete_in_memory(self.index, parts[1])
                     elif cmd == "EXPIRE" and len(parts) == 3:
                         rel_ms = int(parts[2])
-                        self.ttl[parts[1]] = current_time_ms() + rel_ms
+                        self.ttl[parts[1]] = now_ms() + rel_ms
                     elif cmd == "PERSIST" and len(parts) == 2:
                         self.ttl.pop(parts[1], None)
         except Exception as e:
@@ -77,8 +79,7 @@ class KeyValueStore:
         exp = self.ttl.get(key)
         if exp is None:
             return False
-        now = current_time_ms()
-        if now > exp:
+        if now_ms() > exp:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
@@ -94,7 +95,6 @@ class KeyValueStore:
         logging.info("SET %r %r", key, value)
 
     def get(self, key: str) -> Optional[str]:
-        # Expire check only on GET
         if self._is_expired(key):
             return None
         if self.in_txn:
@@ -121,9 +121,8 @@ class KeyValueStore:
         return 1 if removed else 0
 
     def exists(self, key: str) -> int:
-        # DO NOT expire during exists check
         for k, _ in self.index:
-            if k == key and (key not in self.ttl or current_time_ms() <= self.ttl[key]):
+            if k == key and (key not in self.ttl or now_ms() <= self.ttl[key]):
                 return 1
         return 0
 
@@ -140,21 +139,18 @@ class KeyValueStore:
 
     # ---------- TTL ----------
     def expire(self, key: str, ms: int) -> int:
-        """Set TTL in ms if key exists (case-sensitive)."""
         if not any(k == key for k, _ in self.index):
             return 0
-        expire_at = current_time_ms() + int(ms)
-        self.ttl[key] = expire_at
+        self.ttl[key] = now_ms() + int(ms)
         if not self.in_txn:
             self._append_log(f"EXPIRE {key} {ms}")
         return 1
 
     def ttl_cmd(self, key: str) -> int:
-        """Return remaining TTL in ms; -1=no TTL; -2=missing/expired."""
         exp = self.ttl.get(key)
         if exp is None:
             return -1 if any(k == key for k, _ in self.index) else -2
-        remaining = exp - current_time_ms()
+        remaining = exp - now_ms()
         if remaining <= 0:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
@@ -204,15 +200,13 @@ class KeyValueStore:
                 self._append_log(f"DEL {args[0]}")
             elif cmd == "EXPIRE":
                 key, ms = args
-                expire_at = current_time_ms() + int(ms)
-                self.ttl[key] = expire_at
+                self.ttl[key] = now_ms() + int(ms)
                 self._append_log(f"EXPIRE {key} {ms}")
         self.txn_buffer.clear()
         self.in_txn = False
         print("OK")
 
 
-# ---------- CLI ----------
 def _parse(line: str) -> tuple[str, list[str]]:
     parts = line.strip().split()
     if not parts:
@@ -296,5 +290,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-
-
