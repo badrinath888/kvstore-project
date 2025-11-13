@@ -14,8 +14,11 @@ def now_s() -> float:
     return float(time.time())
 
 def setup_logging() -> None:
-    logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(
+        filename=LOG_FILE,
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
 
 def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
     for i, (k, _) in enumerate(index):
@@ -28,6 +31,7 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
     before = len(index)
     index[:] = [(k, v) for (k, v) in index if k != key]
     return len(index) < before
+
 
 # ---------- Core Store ----------
 class KeyValueStore:
@@ -54,12 +58,6 @@ class KeyValueStore:
                         _set_in_memory(self.index, parts[1], parts[2])
                     elif cmd == "DEL" and len(parts) >= 2:
                         _delete_in_memory(self.index, parts[1])
-                    elif cmd == "EXPIRE" and len(parts) == 3:
-                        try:
-                            rel_ms = float(parts[2])
-                            self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
-                        except ValueError:
-                            continue
                     elif cmd == "PERSIST" and len(parts) == 2:
                         self.ttl.pop(parts[1], None)
         except Exception as e:
@@ -135,17 +133,18 @@ class KeyValueStore:
             print(self.get(k) or "nil")
 
     # ----- TTL Commands -----
-   def expire(self, key: str, ms: int) -> int:
-    if self.exists(key):
-        self.ttl[key] = current_time_ms() + ms
-        return 1
-    return 0
+    def expire(self, key: str, ms: int) -> int:
+        """Set TTL (milliseconds). TTL is in-memory only."""
+        if self.exists(key):
+            self.ttl[key] = now_s() + (ms / 1000.0)
+            return 1
+        return 0
 
     def ttl_cmd(self, key: str) -> int:
         exp = self.ttl.get(key)
         if exp is None:
             return -1 if self.exists(key) else -2
-        remaining = int((float(exp) - now_s()) * 1000)
+        remaining = int((exp - now_s()) * 1000)
         if remaining <= 0:
             self._is_expired(key)
             return -2
@@ -191,13 +190,10 @@ class KeyValueStore:
             elif cmd == "DEL":
                 _delete_in_memory(self.index, args[0])
                 self._append_log(f"DEL {args[0]}")
-            elif cmd == "EXPIRE":
-                key, ms = args
-                self.ttl[key] = now_s() + (float(ms) / 1000.0)
-                self._append_log(f"EXPIRE {key} {float(ms)}")
         self.txn_buffer.clear()
         self.in_txn = False
         print("OK")
+
 
 # ---------- CLI ----------
 def _parse(line: str) -> tuple[str, list[str]]:
@@ -275,4 +271,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-
