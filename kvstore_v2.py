@@ -59,6 +59,12 @@ class KeyValueStore:
                         _set_in_memory(self.index, parts[1], parts[2])
                     elif cmd == "DEL" and len(parts) >= 2:
                         _delete_in_memory(self.index, parts[1])
+                    elif cmd == "EXPIRE" and len(parts) == 3:
+                        try:
+                            rel_ms = float(parts[2])
+                            self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
+                        except ValueError:
+                            continue
                     elif cmd == "PERSIST" and len(parts) == 2:
                         self.ttl.pop(parts[1], None)
         except Exception as e:
@@ -140,13 +146,13 @@ class KeyValueStore:
 
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
-    key = key.strip()
-    if self.exists(key):
-        expire_at = now_s() + (int(ms) / 1000.0)
-        self.ttl[key] = expire_at
-        self._append_log(f"EXPIRE {key} {ms}")
-        return 1
-    return 0
+        key = key.strip()
+        if self.exists(key):
+            expire_at = now_s() + (int(ms) / 1000.0)
+            self.ttl[key] = expire_at
+            self._append_log(f"EXPIRE {key} {ms}")
+            return 1
+        return 0
 
     def ttl_cmd(self, key: str) -> int:
         key = key.strip()
@@ -281,3 +287,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
