@@ -8,10 +8,10 @@ from typing import List, Tuple, Optional
 DATA_FILE = "data.db"
 LOG_FILE = "kvstore.log"
 
-# ---------- Utilities ----------
-def now_ms() -> int:
-    """Monotonic milliseconds (safe for TTL)."""
-    return int(time.monotonic() * 1000)
+# ---------- Utility ----------
+def now_s() -> float:
+    """Return current wall-clock time in seconds."""
+    return time.time()
 
 def setup_logging() -> None:
     logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
@@ -33,7 +33,7 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        self.ttl: dict[str, int] = {}
+        self.ttl: dict[str, float] = {}
         self.in_txn = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
         self.load()
@@ -52,9 +52,9 @@ class KeyValueStore:
                     elif cmd == "DEL" and len(parts) >= 2:
                         _delete_in_memory(self.index, parts[1])
                     elif cmd == "EXPIRE" and len(parts) == 3:
-                        # interpret stored value as relative milliseconds
-                        rel = int(parts[2])
-                        self.ttl[parts[1]] = now_ms() + rel
+                        # store relative ms; convert to absolute seconds now
+                        rel_ms = int(parts[2])
+                        self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
                     elif cmd == "PERSIST" and len(parts) == 2:
                         self.ttl.pop(parts[1], None)
         except Exception as e:
@@ -65,10 +65,10 @@ class KeyValueStore:
             f.write(line + "\n")
             f.flush(); os.fsync(f.fileno())
 
-    # ----- Expiry Helpers -----
+    # ----- Expiry -----
     def _is_expired(self, key: str) -> bool:
         exp = self.ttl.get(key)
-        if exp and now_ms() > exp:
+        if exp and now_s() > exp:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
@@ -80,6 +80,7 @@ class KeyValueStore:
             self.txn_buffer.append(("SET", [key, value])); return
         _set_in_memory(self.index, key, value)
         self._append_log(f"SET {key} {value}")
+        logging.info("SET %r %r", key, value)
 
     def get(self, key: str) -> Optional[str]:
         if self._is_expired(key): return None
@@ -114,8 +115,7 @@ class KeyValueStore:
     # ----- TTL -----
     def expire(self, key: str, ms: int) -> int:
         if not self.exists(key): return 0
-        expire_at = now_ms() + ms
-        self.ttl[key] = expire_at
+        self.ttl[key] = now_s() + (ms / 1000.0)
         if not self.in_txn: self._append_log(f"EXPIRE {key} {ms}")
         return 1
 
@@ -123,7 +123,7 @@ class KeyValueStore:
         exp = self.ttl.get(key)
         if exp is None:
             return -1 if self.exists(key) else -2
-        remaining = exp - now_ms()
+        remaining = int((exp - now_s()) * 1000)
         if remaining <= 0:
             self._is_expired(key)
             return -2
@@ -131,8 +131,7 @@ class KeyValueStore:
 
     def persist(self, key: str) -> int:
         if key in self.ttl:
-            del self.ttl[key]
-            self._append_log(f"PERSIST {key}")
+            del self.ttl[key]; self._append_log(f"PERSIST {key}")
             return 1
         return 0
 
@@ -162,7 +161,7 @@ class KeyValueStore:
                 self._append_log(f"DEL {args[0]}")
             elif cmd == "EXPIRE":
                 key, ms = args
-                self.ttl[key] = now_ms() + int(ms)
+                self.ttl[key] = now_s() + (int(ms) / 1000.0)
                 self._append_log(f"EXPIRE {key} {ms}")
         self.txn_buffer.clear(); self.in_txn = False; print("OK")
 
