@@ -148,23 +148,29 @@ class KeyValueStore:
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
         key = key.strip()
-        if self.exists(key):
-            expire_at = now_s() + (int(ms) / 1000.0)
-            self.ttl[key] = expire_at
-            self._append_log(f"EXPIRE {key} {ms}")
-            return 1
-        return 0
+        if not self.exists(key):
+            return 0
+        # store expiration as an absolute timestamp in SECONDS
+        expire_at = now_s() + (float(ms) / 1000.0)
+        self.ttl[key] = expire_at
+        self._append_log(f"EXPIRE {key} {ms}")
+        return 1
 
     def ttl_cmd(self, key: str) -> int:
         key = key.strip()
-        exp = self.ttl.get(key)
-        if exp is None:
+        if key not in self.ttl:
+            # -1 = exists but no TTL, -2 = does not exist
             return -1 if self.exists(key) else -2
-        remaining = int((exp - now_s()) * 1000)
+
+        exp = self.ttl[key]
+        remaining = int((exp - now_s()) * 1000)  # ms left
+
         if remaining <= 0:
             self._is_expired(key)
             return -2
+
         return remaining
+
 
     def persist(self, key: str) -> int:
         key = key.strip()
