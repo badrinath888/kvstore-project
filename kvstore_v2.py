@@ -43,6 +43,7 @@ class KeyValueStore:
         self.txn_buffer: list[tuple[str, list[str]]] = []
         self.load()
 
+    # ---------- Persistence ----------
     def load(self) -> None:
         if not os.path.exists(DATA_FILE):
             return
@@ -71,6 +72,7 @@ class KeyValueStore:
             f.flush()
             os.fsync(f.fileno())
 
+    # ---------- Expiry Helpers ----------
     def _is_expired(self, key: str) -> bool:
         exp = self.ttl.get(key)
         if exp is None:
@@ -82,6 +84,7 @@ class KeyValueStore:
             return True
         return False
 
+    # ---------- Core Commands ----------
     def set(self, key: str, value: str) -> None:
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
@@ -91,6 +94,7 @@ class KeyValueStore:
         logging.info("SET %r %r", key, value)
 
     def get(self, key: str) -> Optional[str]:
+        # Expire check only on GET
         if self._is_expired(key):
             return None
         if self.in_txn:
@@ -117,13 +121,13 @@ class KeyValueStore:
         return 1 if removed else 0
 
     def exists(self, key: str) -> int:
-        if self._is_expired(key):
-            return 0
+        # DO NOT expire during exists check
         for k, _ in self.index:
-            if k == key:
+            if k == key and (key not in self.ttl or current_time_ms() <= self.ttl[key]):
                 return 1
         return 0
 
+    # ---------- Multi-Key ----------
     def mset(self, pairs: List[str]) -> None:
         for i in range(0, len(pairs), 2):
             self.set(pairs[i], pairs[i + 1])
@@ -134,24 +138,28 @@ class KeyValueStore:
             val = self.get(k)
             print(val if val is not None else "nil")
 
+    # ---------- TTL ----------
     def expire(self, key: str, ms: int) -> int:
-        if not self.exists(key):
+        """Set TTL in ms if key exists (case-sensitive)."""
+        if not any(k == key for k, _ in self.index):
             return 0
-        expire_at = current_time_ms() + int(ms) + 2  # small buffer
+        expire_at = current_time_ms() + int(ms)
         self.ttl[key] = expire_at
         if not self.in_txn:
             self._append_log(f"EXPIRE {key} {ms}")
         return 1
 
     def ttl_cmd(self, key: str) -> int:
-        if key not in self.ttl:
-            return -1 if self.exists(key) else -2
-        remaining = self.ttl[key] - current_time_ms()
-        if remaining < 0:
+        """Return remaining TTL in ms; -1=no TTL; -2=missing/expired."""
+        exp = self.ttl.get(key)
+        if exp is None:
+            return -1 if any(k == key for k, _ in self.index) else -2
+        remaining = exp - current_time_ms()
+        if remaining <= 0:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return -2
-        return remaining if remaining > 0 else 1  # grace period fix
+        return remaining
 
     def persist(self, key: str) -> int:
         if key in self.ttl:
@@ -161,6 +169,7 @@ class KeyValueStore:
             return 1
         return 0
 
+    # ---------- RANGE ----------
     def range_cmd(self, start: str, end: str) -> None:
         keys = sorted(k for k, _ in self.index if not self._is_expired(k))
         for k in keys:
@@ -168,6 +177,7 @@ class KeyValueStore:
                 print(k)
         print("END")
 
+    # ---------- Transactions ----------
     def begin(self) -> None:
         if self.in_txn:
             print("ERR transaction already started")
@@ -202,6 +212,7 @@ class KeyValueStore:
         print("OK")
 
 
+# ---------- CLI ----------
 def _parse(line: str) -> tuple[str, list[str]]:
     parts = line.strip().split()
     if not parts:
@@ -223,7 +234,6 @@ def run_repl() -> None:
         if not line:
             continue
         cmd, args = _parse(line)
-
         try:
             if cmd == "":
                 continue
@@ -286,4 +296,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
 
