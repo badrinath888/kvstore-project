@@ -136,13 +136,10 @@ class KeyValueStore:
 
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
-        if not self.exists(key):
-            return 0
-        expire_at = now_s() + (float(ms) / 1000.0)
-        self.ttl[key] = expire_at
-        if not self.in_txn:
-            self._append_log(f"EXPIRE {key} {float(ms)}")
+    if self.exists(key):
+        self.ttl[key] = current_time_ms() + ms
         return 1
+    return 0
 
     def ttl_cmd(self, key: str) -> int:
         exp = self.ttl.get(key)
