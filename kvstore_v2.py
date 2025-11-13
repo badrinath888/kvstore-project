@@ -2,7 +2,7 @@
 # KV Store Project 2 – Transactions, TTL, Range, Multi-Ops
 # CSCE 5350 | Author: Badrinath | EUID: 11820168
 
-import os, sys, time, bisect, logging
+import os, sys, time, logging
 from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
@@ -21,6 +21,7 @@ def setup_logging() -> None:
     )
 
 def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
+    key, value = key.strip(), value.strip()
     for i, (k, _) in enumerate(index):
         if k == key:
             index[i] = (key, value)
@@ -28,6 +29,7 @@ def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
     index.append((key, value))
 
 def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
+    key = key.strip()
     before = len(index)
     index[:] = [(k, v) for (k, v) in index if k != key]
     return len(index) < before
@@ -64,7 +66,7 @@ class KeyValueStore:
 
     def _append_log(self, line: str) -> None:
         with open(DATA_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+            f.write(line.strip() + "\n")
             f.flush()
             os.fsync(f.fileno())
 
@@ -81,7 +83,7 @@ class KeyValueStore:
 
     # ----- Core Commands -----
     def set(self, key: str, value: str) -> None:
-        """Set or update key-value pair (immediate memory + log)."""
+        key, value = key.strip(), value.strip()
         _set_in_memory(self.index, key, value)
         if self.in_txn:
             self.txn_buffer.append(("SET", [key, value]))
@@ -90,6 +92,7 @@ class KeyValueStore:
         logging.info("SET %r %r", key, value)
 
     def get(self, key: str) -> Optional[str]:
+        key = key.strip()
         if self._is_expired(key):
             return None
         if self.in_txn:
@@ -104,6 +107,7 @@ class KeyValueStore:
         return None
 
     def delete(self, key: str) -> int:
+        key = key.strip()
         if self._is_expired(key):
             return 0
         if self.in_txn:
@@ -116,9 +120,13 @@ class KeyValueStore:
         return int(removed)
 
     def exists(self, key: str) -> int:
-        if self._is_expired(key):
-            return 0
-        return int(any(k == key for k, _ in self.index))
+        """Return 1 if key exists and not expired, else 0."""
+        key = key.strip()
+        self._is_expired(key)
+        for k, v in self.index:
+            if k == key:
+                return 1
+        return 0
 
     # ----- Multi -----
     def mset(self, pairs: List[str]) -> None:
@@ -132,13 +140,14 @@ class KeyValueStore:
 
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
-        """Set TTL (milliseconds)."""
+        key = key.strip()
         if self.exists(key):
             self.ttl[key] = now_s() + (ms / 1000.0)
             return 1
         return 0
 
     def ttl_cmd(self, key: str) -> int:
+        key = key.strip()
         exp = self.ttl.get(key)
         if exp is None:
             return -1 if self.exists(key) else -2
@@ -149,6 +158,7 @@ class KeyValueStore:
         return remaining
 
     def persist(self, key: str) -> int:
+        key = key.strip()
         if key in self.ttl:
             self.ttl.pop(key)
             self._append_log(f"PERSIST {key}")
@@ -157,6 +167,7 @@ class KeyValueStore:
 
     # ----- RANGE -----
     def range_cmd(self, start: str, end: str) -> None:
+        start, end = start.strip(), end.strip()
         keys = sorted(k for k, _ in self.index if not self._is_expired(k))
         for k in keys:
             if (not start or k >= start) and (not end or k <= end):
@@ -268,4 +279,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-
