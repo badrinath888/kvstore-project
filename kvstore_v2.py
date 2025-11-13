@@ -11,7 +11,7 @@ LOG_FILE = "kvstore.log"
 # ---------- Utility ----------
 def now_s() -> float:
     """Return current wall-clock time in seconds."""
-    return time.time()
+    return float(time.time())
 
 def setup_logging() -> None:
     logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
@@ -40,35 +40,45 @@ class KeyValueStore:
 
     # ----- Persistence -----
     def load(self) -> None:
-        if not os.path.exists(DATA_FILE): return
+        """Replay append-only data file on startup."""
+        if not os.path.exists(DATA_FILE):
+            return
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 for raw in f:
                     parts = raw.strip().split(" ", 2)
-                    if not parts: continue
+                    if not parts:
+                        continue
                     cmd = parts[0].upper()
                     if cmd == "SET" and len(parts) == 3:
                         _set_in_memory(self.index, parts[1], parts[2])
                     elif cmd == "DEL" and len(parts) >= 2:
                         _delete_in_memory(self.index, parts[1])
                     elif cmd == "EXPIRE" and len(parts) == 3:
-                        # store relative ms; convert to absolute seconds now
-                        rel_ms = int(parts[2])
-                        self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
+                        try:
+                            rel_ms = float(parts[2])
+                            self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
+                        except ValueError:
+                            continue
                     elif cmd == "PERSIST" and len(parts) == 2:
                         self.ttl.pop(parts[1], None)
         except Exception as e:
             logging.error("Replay failed: %s", e)
 
     def _append_log(self, line: str) -> None:
+        """Append a single line to data file."""
         with open(DATA_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
-            f.flush(); os.fsync(f.fileno())
+            f.flush()
+            os.fsync(f.fileno())
 
-    # ----- Expiry -----
+    # ----- TTL -----
     def _is_expired(self, key: str) -> bool:
+        """Check and remove expired key."""
         exp = self.ttl.get(key)
-        if exp and now_s() > exp:
+        if exp is None:
+            return False
+        if now_s() > float(exp):
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
@@ -77,53 +87,68 @@ class KeyValueStore:
     # ----- Core Commands -----
     def set(self, key: str, value: str) -> None:
         if self.in_txn:
-            self.txn_buffer.append(("SET", [key, value])); return
+            self.txn_buffer.append(("SET", [key, value]))
+            return
         _set_in_memory(self.index, key, value)
         self._append_log(f"SET {key} {value}")
         logging.info("SET %r %r", key, value)
 
     def get(self, key: str) -> Optional[str]:
-        if self._is_expired(key): return None
+        if self._is_expired(key):
+            return None
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
-                if cmd == "SET" and args[0] == key: return args[1]
-                if cmd == "DEL" and args[0] == key: return None
+                if cmd == "SET" and args[0] == key:
+                    return args[1]
+                if cmd == "DEL" and args[0] == key:
+                    return None
         for k, v in self.index:
-            if k == key: return v
+            if k == key:
+                return v
         return None
 
     def delete(self, key: str) -> int:
-        if self._is_expired(key): return 0
+        if self._is_expired(key):
+            return 0
         if self.in_txn:
-            self.txn_buffer.append(("DEL", [key])); return 1
+            self.txn_buffer.append(("DEL", [key]))
+            return 1
         removed = _delete_in_memory(self.index, key)
         self.ttl.pop(key, None)
-        if removed: self._append_log(f"DEL {key}")
+        if removed:
+            self._append_log(f"DEL {key}")
         return int(removed)
 
     def exists(self, key: str) -> int:
-        return int(any(k == key and not self._is_expired(k) for k, _ in self.index))
+        if self._is_expired(key):
+            return 0
+        return int(any(k == key for k, _ in self.index))
 
     # ----- Multi -----
     def mset(self, pairs: List[str]) -> None:
-        for i in range(0, len(pairs), 2): self.set(pairs[i], pairs[i+1])
+        for i in range(0, len(pairs), 2):
+            self.set(pairs[i], pairs[i + 1])
         print("OK")
 
     def mget(self, keys: List[str]) -> None:
-        for k in keys: print(self.get(k) or "nil")
+        for k in keys:
+            print(self.get(k) or "nil")
 
-    # ----- TTL -----
+    # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
-        if not self.exists(key): return 0
-        self.ttl[key] = now_s() + (ms / 1000.0)
-        if not self.in_txn: self._append_log(f"EXPIRE {key} {ms}")
+        if not self.exists(key):
+            return 0
+        expire_at = now_s() + (float(ms) / 1000.0)
+        self.ttl[key] = expire_at
+        if not self.in_txn:
+            self._append_log(f"EXPIRE {key} {float(ms)}")
         return 1
 
     def ttl_cmd(self, key: str) -> int:
         exp = self.ttl.get(key)
         if exp is None:
             return -1 if self.exists(key) else -2
-        remaining = int((exp - now_s()) * 1000)
+        remaining = int((float(exp) - now_s()) * 1000)
         if remaining <= 0:
             self._is_expired(key)
             return -2
@@ -131,27 +156,37 @@ class KeyValueStore:
 
     def persist(self, key: str) -> int:
         if key in self.ttl:
-            del self.ttl[key]; self._append_log(f"PERSIST {key}")
+            self.ttl.pop(key)
+            self._append_log(f"PERSIST {key}")
             return 1
         return 0
 
-    # ----- Range -----
+    # ----- RANGE -----
     def range_cmd(self, start: str, end: str) -> None:
-        for k, _ in sorted(self.index):
-            if self._is_expired(k): continue
-            if (not start or k >= start) and (not end or k <= end): print(k)
+        keys = sorted(k for k, _ in self.index if not self._is_expired(k))
+        for k in keys:
+            if (not start or k >= start) and (not end or k <= end):
+                print(k)
         print("END")
 
     # ----- Transactions -----
     def begin(self) -> None:
-        if self.in_txn: print("ERR transaction already started"); return
-        self.in_txn = True; self.txn_buffer.clear(); print("OK")
+        if self.in_txn:
+            print("ERR transaction already started")
+            return
+        self.in_txn = True
+        self.txn_buffer.clear()
+        print("OK")
 
     def abort(self) -> None:
-        self.txn_buffer.clear(); self.in_txn = False; print("OK")
+        self.txn_buffer.clear()
+        self.in_txn = False
+        print("OK")
 
     def commit(self) -> None:
-        if not self.in_txn: print("ERR no transaction"); return
+        if not self.in_txn:
+            print("ERR no transaction")
+            return
         for cmd, args in self.txn_buffer:
             if cmd == "SET":
                 _set_in_memory(self.index, args[0], args[1])
@@ -161,9 +196,11 @@ class KeyValueStore:
                 self._append_log(f"DEL {args[0]}")
             elif cmd == "EXPIRE":
                 key, ms = args
-                self.ttl[key] = now_s() + (int(ms) / 1000.0)
-                self._append_log(f"EXPIRE {key} {ms}")
-        self.txn_buffer.clear(); self.in_txn = False; print("OK")
+                self.ttl[key] = now_s() + (float(ms) / 1000.0)
+                self._append_log(f"EXPIRE {key} {float(ms)}")
+        self.txn_buffer.clear()
+        self.in_txn = False
+        print("OK")
 
 # ---------- CLI ----------
 def _parse(line: str) -> tuple[str, list[str]]:
@@ -179,31 +216,66 @@ def run_repl() -> None:
     store = KeyValueStore()
     for raw in sys.stdin:
         line = raw.strip()
-        if not line: continue
+        if not line:
+            continue
         cmd, args = _parse(line)
         try:
-            if cmd == "": continue
-            if cmd == "EXIT": break
-            if cmd == "SET" and len(args) == 2: store.set(*args); print("OK"); continue
-            if cmd == "GET" and len(args) == 1: print(store.get(args[0]) or "nil"); continue
-            if cmd == "DEL" and len(args) == 1: print(store.delete(args[0])); continue
-            if cmd == "EXISTS" and len(args) == 1: print(store.exists(args[0])); continue
-            if cmd == "MSET" and len(args) % 2 == 0: store.mset(args); continue
-            if cmd == "MGET": store.mget(args); continue
-            if cmd == "EXPIRE" and len(args) == 2: print(store.expire(args[0], int(args[1]))); continue
-            if cmd == "TTL" and len(args) == 1: print(store.ttl_cmd(args[0])); continue
-            if cmd == "PERSIST" and len(args) == 1: print(store.persist(args[0])); continue
-            if cmd == "RANGE": start,end=(args+["",""])[:2]; store.range_cmd(start,end); continue
-            if cmd == "BEGIN": store.begin(); continue
-            if cmd == "COMMIT": store.commit(); continue
-            if cmd == "ABORT": store.abort(); continue
+            if cmd == "":
+                continue
+            if cmd == "EXIT":
+                break
+            if cmd == "SET" and len(args) == 2:
+                store.set(*args)
+                print("OK")
+                continue
+            if cmd == "GET" and len(args) == 1:
+                print(store.get(args[0]) or "nil")
+                continue
+            if cmd == "DEL" and len(args) == 1:
+                print(store.delete(args[0]))
+                continue
+            if cmd == "EXISTS" and len(args) == 1:
+                print(store.exists(args[0]))
+                continue
+            if cmd == "MSET" and len(args) % 2 == 0:
+                store.mset(args)
+                continue
+            if cmd == "MGET":
+                store.mget(args)
+                continue
+            if cmd == "EXPIRE" and len(args) == 2:
+                print(store.expire(args[0], int(args[1])))
+                continue
+            if cmd == "TTL" and len(args) == 1:
+                print(store.ttl_cmd(args[0]))
+                continue
+            if cmd == "PERSIST" and len(args) == 1:
+                print(store.persist(args[0]))
+                continue
+            if cmd == "RANGE":
+                start, end = (args + ["", ""])[:2]
+                store.range_cmd(start, end)
+                continue
+            if cmd == "BEGIN":
+                store.begin()
+                continue
+            if cmd == "COMMIT":
+                store.commit()
+                continue
+            if cmd == "ABORT":
+                store.abort()
+                continue
             print("ERR unknown or invalid command")
         except Exception as e:
             print(f"ERR {e}")
 
 def main() -> None:
-    setup_logging(); run_repl()
+    setup_logging()
+    run_repl()
 
 if __name__ == "__main__":
-    try: main()
-    except KeyboardInterrupt: pass
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+
