@@ -135,7 +135,7 @@ class KeyValueStore:
             print(self.get(k) or "nil")
 
     # ----- TTL Commands -----
-    def expire(self, key: str, ms: int) -> int:
+   def expire(self, key: str, ms: int) -> int:
     if self.exists(key):
         self.ttl[key] = current_time_ms() + ms
         return 1
