@@ -62,6 +62,7 @@ class KeyValueStore:
                     elif cmd == "EXPIRE" and len(parts) == 3:
                         try:
                             rel_ms = float(parts[2])
+                            # restore expiration time as relative to current time
                             self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
                         except ValueError:
                             continue
@@ -129,7 +130,7 @@ class KeyValueStore:
         """Return 1 if key exists and not expired, else 0."""
         key = key.strip()
         self._is_expired(key)
-        for k, v in self.index:
+        for k, _ in self.index:
             if k == key:
                 return 1
         return 0
@@ -287,4 +288,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-
