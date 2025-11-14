@@ -50,7 +50,7 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        # store expiry as absolute seconds (time.time())
+        # TTLs are absolute seconds (time.time())
         self.ttl: dict[str, float] = {}
         self.in_txn: bool = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
@@ -58,7 +58,12 @@ class KeyValueStore:
 
     # ----- Persistence -----
     def load(self) -> None:
-        """Replay append-only log on startup."""
+        """
+        Replay append-only log on startup.
+
+        NOTE: For simplicity and to avoid timestamp drift, we DO NOT
+        restore TTLs from file. TTL is in-memory only.
+        """
         if not os.path.exists(DATA_FILE):
             return
         try:
@@ -72,15 +77,10 @@ class KeyValueStore:
                         _set_in_memory(self.index, parts[1], parts[2])
                     elif cmd == "DEL" and len(parts) >= 2:
                         _delete_in_memory(self.index, parts[1])
-                    elif cmd == "EXPIRE" and len(parts) == 3:
-                        # Treat stored value as relative ms, convert to seconds
-                        try:
-                            rel_ms = int(parts[2])
-                            self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
-                        except ValueError:
-                            continue
                     elif cmd == "PERSIST" and len(parts) == 2:
-                        self.ttl.pop(parts[1], None)
+                        # TTL is in-memory only; nothing to do here
+                        continue
+                    # EXPIRE lines are ignored on replay
         except Exception as e:
             logging.error("Replay failed: %s", e)
 
@@ -109,7 +109,7 @@ class KeyValueStore:
         key = key.strip()
         value = value.strip()
         if self.in_txn:
-            # buffer only; apply on COMMIT
+            # Buffer only; apply on COMMIT
             self.txn_buffer.append(("SET", [key, value]))
             return
         _set_in_memory(self.index, key, value)
@@ -120,7 +120,7 @@ class KeyValueStore:
         if self._is_expired(key):
             return None
 
-        # read-your-writes in transaction
+        # Read-your-writes in transaction
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if cmd == "SET" and args[0] == key:
@@ -154,7 +154,7 @@ class KeyValueStore:
         if self._is_expired(key):
             return 0
 
-        # read-your-writes in transaction
+        # Read-your-writes in transaction
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
@@ -186,10 +186,10 @@ class KeyValueStore:
         key = key.strip()
         if self.exists(key) == 0:
             return 0
-        # store absolute expiry in seconds
+        # Store absolute expiry in seconds
         expire_at = now_s() + (int(ms) / 1000.0)
         self.ttl[key] = expire_at
-        # log relative ms (per spec)
+        # Log EXPIRE with relative ms (per spec)
         self._append_log(f"EXPIRE {key} {ms}")
         return 1
 
@@ -364,8 +364,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-
-
-
-
-
