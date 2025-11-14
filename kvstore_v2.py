@@ -1,4 +1,3 @@
-cat > kvstore_v2.py <<'PY'
 #!/usr/bin/env python3
 # KV Store Project 2 – Transactions, TTL, Range, Multi-Ops
 # CSCE 5350 | Author: Badrinath | EUID: 11820168
@@ -304,4 +303,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-PY
