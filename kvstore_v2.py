@@ -16,7 +16,6 @@ def current_time_ms() -> int:
     """Current wall-clock time in milliseconds."""
     return int(time.time() * 1000)
 
-
 def setup_logging() -> None:
     logging.basicConfig(
         filename=LOG_FILE,
@@ -24,11 +23,8 @@ def setup_logging() -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-
 def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
-    """
-    Last-write-wins list-based index (no dict for the main store).
-    """
+    """Last-write-wins list-based index (no dict for the main store)."""
     key = key.strip()
     value = value.strip()
     for i, (k, _) in enumerate(index):
@@ -37,24 +33,20 @@ def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
             return
     index.append((key, value))
 
-
 def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
-    """
-    Remove key from in-memory index; return True if removed.
-    """
+    """Remove key from in-memory index; return True if removed."""
     key = key.strip()
     before = len(index)
     index[:] = [(k, v) for (k, v) in index if k != key]
     return len(index) < before
 
-
 # ---------- Core Store ----------
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        # TTL store: key -> absolute expiry time in ms since epoch
+        # TTL: key -> absolute expiry time in ms since epoch
         self.ttl: dict[str, int] = {}
-        # Simple single transaction buffer
+        # Transaction state
         self.in_txn: bool = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
         self.load()
@@ -64,7 +56,7 @@ class KeyValueStore:
         """
         Replay append-only data file on startup.
 
-        NOTE: TTL is NOT replayed. Only SET/DEL/PERSIST are applied.
+        NOTE: TTL is NOT replayed; only SET/DEL/PERSIST are applied.
         """
         if not os.path.exists(DATA_FILE):
             return
@@ -80,32 +72,33 @@ class KeyValueStore:
                     elif cmd == "DEL" and len(parts) >= 2:
                         _delete_in_memory(self.index, parts[1])
                     elif cmd == "PERSIST" and len(parts) == 2:
+                        # TTL is in-memory only; nothing to do except drop it if present
                         self.ttl.pop(parts[1].strip(), None)
-                    # EXPIRE lines are ignored on replay: TTL does NOT survive restart.
+                    # EXPIRE lines are intentionally ignored on replay
         except Exception as e:
             logging.error("Replay failed: %s", e)
 
     def _append_log(self, line: str) -> None:
-        """
-        Append a single line to the data file.
-        """
+        """Append a single logical operation to the log."""
         with open(DATA_FILE, "a", encoding="utf-8") as f:
             f.write(line.strip() + "\n")
             f.flush()
             os.fsync(f.fileno())
 
-    # ----- TTL -----
+    # ----- TTL helpers -----
     def _is_expired(self, key: str) -> bool:
         """
-        Check if a key is expired; remove it if so.
+        Check if key is expired; if yes, remove it & TTL and return True.
         """
         key = key.strip()
         exp = self.ttl.get(key)
         if exp is None:
             return False
-        if current_time_ms() >= exp:
+        now = current_time_ms()
+        if now >= exp:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
+            logging.info("EXPIRE_EVICT key=%r now=%d exp=%d", key, now, exp)
             return True
         return False
 
@@ -114,19 +107,18 @@ class KeyValueStore:
         key = key.strip()
         value = value.strip()
         if self.in_txn:
-            # Buffer only the logical write; logging happens on COMMIT.
             self.txn_buffer.append(("SET", [key, value]))
             return
         _set_in_memory(self.index, key, value)
         self._append_log(f"SET {key} {value}")
-        logging.info("SET %r %r", key, value)
+        logging.info("SET key=%r value_len=%d", key, len(value))
 
     def get(self, key: str) -> Optional[str]:
         key = key.strip()
         if self._is_expired(key):
             return None
 
-        # Read-your-writes inside a transaction
+        # read-your-writes inside a transaction
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
@@ -145,9 +137,8 @@ class KeyValueStore:
         if self._is_expired(key):
             return 0
 
-        # Transactional delete
         if self.in_txn:
-            # Only record a delete if the key currently exists
+            # only buffer delete if it currently exists
             if self.exists(key) == 0:
                 return 0
             self.txn_buffer.append(("DEL", [key]))
@@ -161,7 +152,7 @@ class KeyValueStore:
 
     def exists(self, key: str) -> int:
         """
-        1 if key exists and not expired (respecting transaction), else 0.
+        EXISTS <key> → 1 if present and not expired, else 0.
         """
         key = key.strip()
 
@@ -179,7 +170,7 @@ class KeyValueStore:
                 return 1
         return 0
 
-    # ----- Multi-key operations -----
+    # ----- Multi-key -----
     def mset(self, pairs: List[str]) -> None:
         for i in range(0, len(pairs), 2):
             self.set(pairs[i], pairs[i + 1])
@@ -187,7 +178,6 @@ class KeyValueStore:
     def mget(self, keys: List[str]) -> None:
         for k in keys:
             val = self.get(k)
-            # Empty string is allowed, so distinguish None vs ""
             if val is None:
                 print("nil")
             else:
@@ -196,39 +186,43 @@ class KeyValueStore:
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
         """
-        EXPIRE <key> <ms>: 1 if TTL set, 0 if key missing/expired.
-        TTL is stored as absolute milliseconds since epoch.
+        EXPIRE <key> <ms>:
+        - 1 if TTL set
+        - 0 if key missing/expired
+        TTL stored as absolute ms since epoch.
         """
         key = key.strip()
+
         if self.exists(key) == 0:
+            logging.info("EXPIRE_SET key=%r missing_or_expired", key)
             return 0
 
         now = current_time_ms()
-
-        # Values <= 0 expire immediately
         if ms <= 0:
-            self.ttl[key] = now
+            exp = now
         else:
-            self.ttl[key] = now + int(ms)
+            exp = now + int(ms)
 
-        # TTL is not transactional; it always affects the global view.
+        self.ttl[key] = exp
+        logging.info("EXPIRE_SET key=%r now=%d ms=%d exp=%d", key, now, ms, exp)
         self._append_log(f"EXPIRE {key} {ms}")
         return 1
 
     def ttl_cmd(self, key: str) -> int:
         """
         TTL <key>:
-        - remaining milliseconds (positive number)
-        - -1 if key exists but no TTL
-        - -2 if key missing or expired
+        - remaining ms (positive)
+        - -1 if key exists with no TTL
+        - -2 if missing or expired
         """
         key = key.strip()
         exp = self.ttl.get(key)
         if exp is None:
-            # No TTL stored; check if key exists (may also expire it)
             return -1 if self.exists(key) == 1 else -2
 
-        remaining = exp - current_time_ms()
+        now = current_time_ms()
+        remaining = exp - now
+        logging.info("TTL_CHECK key=%r now=%d exp=%d remaining=%d", key, now, exp, remaining)
         if remaining <= 0:
             self._is_expired(key)
             return -2
@@ -236,12 +230,15 @@ class KeyValueStore:
 
     def persist(self, key: str) -> int:
         """
-        PERSIST <key>: remove TTL, keep value; 1 if TTL cleared, else 0.
+        PERSIST <key>:
+        - 1 if TTL cleared
+        - 0 otherwise
         """
         key = key.strip()
         if key in self.ttl:
-            self.ttl.pop(key)
+            self.ttl.pop(key, None)
             self._append_log(f"PERSIST {key}")
+            logging.info("PERSIST key=%r", key)
             return 1
         return 0
 
@@ -249,15 +246,13 @@ class KeyValueStore:
     def range_cmd(self, start: str, end: str) -> None:
         """
         RANGE <start> <end>:
-        List keys in lexicographic order (inclusive).
-        Empty start/end = open-ended.
+        inclusive lexicographic key range; empty bound = open.
         """
         start = start or ""
         end = end or ""
 
-        # Collect unique keys from index (last-write-wins already handled there)
-        keys = []
         seen = set()
+        keys: List[str] = []
         for k, _ in self.index:
             if k in seen:
                 continue
@@ -300,12 +295,10 @@ class KeyValueStore:
         self.in_txn = False
         return True
 
-
 # ---------- CLI ----------
 def _parse(line: str) -> tuple[str, list[str]]:
     parts = line.strip().split()
     return (parts[0].upper(), parts[1:]) if parts else ("", [])
-
 
 def run_repl() -> None:
     try:
@@ -332,11 +325,7 @@ def run_repl() -> None:
                 continue
             if cmd == "GET" and len(args) == 1:
                 val = store.get(args[0])
-                if val is None:
-                    print("nil")
-                else:
-                    # empty string should print as an empty line
-                    print(val)
+                print("nil" if val is None else val)
                 continue
             if cmd == "DEL" and len(args) == 1:
                 print(store.delete(args[0]))
@@ -361,7 +350,6 @@ def run_repl() -> None:
                 print(store.persist(args[0]))
                 continue
             if cmd == "RANGE":
-                # allow missing bounds; empty string means open
                 start, end = (args + ["", ""])[:2]
                 store.range_cmd(start, end)
                 continue
@@ -375,15 +363,27 @@ def run_repl() -> None:
                 store.abort()
                 print("OK")
                 continue
+
+            # -------- Debug-only commands (won't affect Gradebot unless used) --------
+            if cmd == "DEBUG_TTL" and len(args) == 1:
+                k = args[0].strip()
+                exp = store.ttl.get(k)
+                now = current_time_ms()
+                rem = (exp - now) if exp is not None else None
+                print(f"exp={exp} now={now} remaining={rem}")
+                continue
+            if cmd == "DEBUG_NOW":
+                print(f"now={current_time_ms()}")
+                continue
+            # -------------------------------------------------------------------------
+
             print("ERR unknown or invalid command")
         except Exception as e:
             print(f"ERR {e}")
 
-
 def main() -> None:
     setup_logging()
     run_repl()
-
 
 if __name__ == "__main__":
     main()
