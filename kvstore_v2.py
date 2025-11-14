@@ -1,3 +1,4 @@
+cat > kvstore_v2.py <<'PY'
 #!/usr/bin/env python3
 # KV Store Project 2 – Transactions, TTL, Range, Multi-Ops
 # CSCE 5350 | Author: Badrinath | EUID: 11820168
@@ -163,9 +164,9 @@ class KeyValueStore:
     def ttl_cmd(self, key: str) -> int:
         """
         TTL <key>:
-          remaining ms (>=1),
+          remaining ms,
           -1 if exists without TTL,
-          -2 if missing or expired (also purges if expired).
+          -2 if missing/expired (also purges if expired).
         """
         key = key.strip()
         exp = self.ttl.get(key)
@@ -276,7 +277,7 @@ def run_repl() -> None:
             if cmd == "ABORT":
                 store.abort(); print("OK"); continue
 
-            # ---- Local debug helpers (safe to leave; Gradebot won't call them) ----
+            # ---- Local debug only ----
             if cmd == "DEBUG_TTL" and len(args) == 1:
                 k = args[0].strip()
                 exp = store.ttl.get(k)
@@ -288,9 +289,10 @@ def run_repl() -> None:
             if cmd == "SLEEP" and len(args) == 1:
                 try:
                     ms = int(args[0]); time.sleep(max(ms, 0)/1000.0)
-                except Exception: pass
+                except Exception:
+                    pass
                 continue
-            # -----------------------------------------------------------------------
+            # --------------------------
 
             print("ERR unknown or invalid command")
         except Exception as e:
@@ -302,4 +304,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
+PY
