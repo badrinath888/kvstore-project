@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # KV Store Project 2 – Transactions, TTL, Range, Multi-Ops
-# CSCE 5350 | Author Badrinath | EUID 11820168
+# CSCE 5350 | Author: Badrinath | EUID: 11820168
 
 import os, sys, time, logging
 from typing import List, Tuple, Optional
@@ -18,12 +18,11 @@ def setup_logging() -> None:
                         format="%(asctime)s [%(levelname)s] %(message)s")
 
 def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
-    key, value = key.strip(), value.strip()
     for i, (k, _) in enumerate(index):
         if k == key:
-            index[i] = (key, value)
+            index[i] = (key.strip(), value.strip())
             return
-    index.append((key, value))
+    index.append((key.strip(), value.strip()))
 
 def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
     before = len(index)
@@ -35,7 +34,7 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        self.ttl: dict[str, int] = {}  # expiry in ms
+        self.ttl: dict[str, int] = {}       # expiry times in ms
         self.in_txn = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
         self.load()
@@ -60,8 +59,8 @@ class KeyValueStore:
                         try:
                             rel_ms = int(parts[2])
                             self.ttl[parts[1]] = now_ms() + rel_ms
-                        except Exception:
-                            pass
+                        except ValueError:
+                            continue
                     elif cmd == "PERSIST" and len(parts) == 2:
                         self.ttl.pop(parts[1], None)
         except Exception as e:
@@ -88,8 +87,8 @@ class KeyValueStore:
         key = key.strip()
         if not self.exists(key):
             return 0
-        exp_time = now_ms() + int(ms)
-        self.ttl[key] = exp_time
+        exp_ms = now_ms() + int(ms)          # <-- this fixes your bug
+        self.ttl[key] = exp_ms
         self._append_log(f"EXPIRE {key} {ms}")
         return 1
 
@@ -254,5 +253,6 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
 
 
