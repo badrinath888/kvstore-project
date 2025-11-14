@@ -83,11 +83,11 @@ class KeyValueStore:
             return True
         return False
 
-    def expire(self, key: str, ms: int) -> int:
+        def expire(self, key: str, ms: int) -> int:
         key = key.strip()
         if not self.exists(key):
             return 0
-        exp_ms = now_ms() + int(ms)          # <-- this fixes your bug
+        exp_ms = now_ms() + int(ms)  # <-- FIX: use correct function
         self.ttl[key] = exp_ms
         self._append_log(f"EXPIRE {key} {ms}")
         return 1
