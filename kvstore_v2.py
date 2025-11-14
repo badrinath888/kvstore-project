@@ -13,9 +13,9 @@ LOG_FILE = "kvstore.log"
 
 # ---------- Utility ----------
 
-def now_ms() -> int:
-    """Current wall-clock time in milliseconds."""
-    return int(time.time() * 1000)
+def now_s() -> float:
+    """Current wall-clock time in seconds (float)."""
+    return float(time.time())
 
 
 def setup_logging() -> None:
@@ -50,7 +50,8 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        self.ttl: dict[str, int] = {}  # key -> absolute expiry in ms
+        # store expiry as absolute seconds (time.time())
+        self.ttl: dict[str, float] = {}
         self.in_txn: bool = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
         self.load()
@@ -72,10 +73,10 @@ class KeyValueStore:
                     elif cmd == "DEL" and len(parts) >= 2:
                         _delete_in_memory(self.index, parts[1])
                     elif cmd == "EXPIRE" and len(parts) == 3:
-                        # Store as relative ms; on replay treat as new relative TTL
+                        # Treat stored value as relative ms, convert to seconds
                         try:
                             rel_ms = int(parts[2])
-                            self.ttl[parts[1]] = now_ms() + rel_ms
+                            self.ttl[parts[1]] = now_s() + (rel_ms / 1000.0)
                         except ValueError:
                             continue
                     elif cmd == "PERSIST" and len(parts) == 2:
@@ -97,7 +98,7 @@ class KeyValueStore:
         exp = self.ttl.get(key)
         if exp is None:
             return False
-        if now_ms() >= exp:
+        if now_s() >= exp:
             _delete_in_memory(self.index, key)
             self.ttl.pop(key, None)
             return True
@@ -108,7 +109,7 @@ class KeyValueStore:
         key = key.strip()
         value = value.strip()
         if self.in_txn:
-            # Only buffer; log & apply on COMMIT
+            # buffer only; apply on COMMIT
             self.txn_buffer.append(("SET", [key, value]))
             return
         _set_in_memory(self.index, key, value)
@@ -119,7 +120,7 @@ class KeyValueStore:
         if self._is_expired(key):
             return None
 
-        # Read-your-writes inside transaction
+        # read-your-writes in transaction
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if cmd == "SET" and args[0] == key:
@@ -138,8 +139,6 @@ class KeyValueStore:
             return 0
 
         if self.in_txn:
-            # Buffer logical delete; result should reflect logical view
-            # (simple version: check base store only)
             existed = any(k == key for k, _ in self.index)
             self.txn_buffer.append(("DEL", [key]))
             return 1 if existed else 0
@@ -155,7 +154,7 @@ class KeyValueStore:
         if self._is_expired(key):
             return 0
 
-        # Read-your-writes in transaction
+        # read-your-writes in transaction
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
@@ -187,9 +186,10 @@ class KeyValueStore:
         key = key.strip()
         if self.exists(key) == 0:
             return 0
-        exp_ms = now_ms() + int(ms)
-        self.ttl[key] = exp_ms
-        # Log relative TTL value (ms)
+        # store absolute expiry in seconds
+        expire_at = now_s() + (int(ms) / 1000.0)
+        self.ttl[key] = expire_at
+        # log relative ms (per spec)
         self._append_log(f"EXPIRE {key} {ms}")
         return 1
 
@@ -198,11 +198,11 @@ class KeyValueStore:
         exp = self.ttl.get(key)
         if exp is None:
             return -1 if self.exists(key) == 1 else -2
-        remaining = exp - now_ms()
-        if remaining <= 0:
+        remaining_ms = int((exp - now_s()) * 1000)
+        if remaining_ms <= 0:
             self._is_expired(key)
             return -2
-        return int(remaining)
+        return remaining_ms
 
     def persist(self, key: str) -> int:
         key = key.strip()
@@ -216,7 +216,6 @@ class KeyValueStore:
     def range_cmd(self, start: str, end: str) -> None:
         start = start.strip()
         end = end.strip()
-        # Filter out expired keys
         keys = sorted(
             k for k, _ in self.index
             if not self._is_expired(k)
@@ -286,6 +285,7 @@ def run_repl() -> None:
         try:
             if cmd == "":
                 continue
+
             if cmd == "EXIT":
                 break
 
@@ -364,6 +364,7 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
 
 
 
