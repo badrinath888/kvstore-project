@@ -99,6 +99,7 @@ class KeyValueStore:
         if self._is_expired(key):
             return None
         if self.in_txn:
+            # read-your-writes inside this session
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
                     if cmd == "SET": return args[1]
@@ -113,6 +114,7 @@ class KeyValueStore:
         if self._is_expired(key):
             return 0
         if self.in_txn:
+            # Only buffer a DEL if it would actually delete something visible
             if self.exists(key) == 0:
                 return 0
             self.txn_buffer.append(("DEL", [key]))
@@ -188,7 +190,7 @@ class KeyValueStore:
 
     # ----- RANGE -----
     def range_cmd(self, start: str, end: str) -> None:
-        # Defensive: treat literal "" as open bound if it somehow arrives here
+        # Defensive: accept literal "" as open bound if it somehow arrives here
         if start == '""': start = ""
         if end   == '""': end   = ""
         start = start or ""
@@ -197,14 +199,14 @@ class KeyValueStore:
         seen = set()
         keys: List[str] = []
         for k, _ in self.index:
-            if k in seen: 
+            if k in seen:
                 continue
             seen.add(k)
-            if self._is_expired(k): 
+            if self._is_expired(k):
                 continue
-            if start and k < start: 
+            if start and k < start:
                 continue
-            if end and k > end: 
+            if end and k > end:
                 continue
             keys.append(k)
 
@@ -256,9 +258,9 @@ def run_repl() -> None:
             continue
         cmd, args = _parse(line)
         try:
-            if cmd == "": 
+            if cmd == "":
                 continue
-            if cmd == "EXIT": 
+            if cmd == "EXIT":
                 break
 
             if cmd == "SET" and len(args) == 2:
@@ -285,7 +287,7 @@ def run_repl() -> None:
                 # Treat literal "" as open bound at the CLI layer
                 if s == '""': s = ""
                 if e == '""': e = ""
-                store.range_cmd(s, e); 
+                store.range_cmd(s, e)
                 continue
 
             if cmd == "BEGIN":
@@ -322,3 +324,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
