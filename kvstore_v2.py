@@ -268,7 +268,11 @@ def run_repl() -> None:
             if cmd == "PERSIST" and len(args) == 1:
                 print(store.persist(args[0])); continue
             if cmd == "RANGE":
-                s, e = (args + ["", ""])[:2]; store.range_cmd(s, e); continue
+                s, e = (args + ["", ""])[:2]
+                # Treat literal "" as open bound
+                if s == '""': s = ""
+                if e == '""': e = ""
+                store.range_cmd(s, e); continue
             if cmd == "BEGIN":
                 print("OK" if store.begin() else "ERR transaction already started"); continue
             if cmd == "COMMIT":
