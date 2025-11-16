@@ -5,3 +5,7 @@ __pycache__/
 *.png
 !gradebot_screenshot.png
 
+
+# local backups
+kvstore_v2.backup.py
+kvstore_v2_backup.py
