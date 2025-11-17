@@ -181,11 +181,14 @@ class KeyValueStore:
             self._append_log(f"PERSIST {key}")
             return 1
         return 0
-
+        
     # ---------- RANGE (Gradebot version) ----------
     def range_cmd(self, start: str, end: str) -> None:
-        if start == '""': start = ""
-        if end == '""':   end = ""
+        # Convert literal "" to empty string
+        if start == '""':
+            start = ""
+        if end == '""':
+            end = ""
 
         start = start or ""
         end = end or ""
@@ -198,8 +201,7 @@ class KeyValueStore:
                 continue
             seen.add(k)
 
-            # Gradebot REQUIRED behavior:
-            # include ONLY single lowercase letters a..z
+            # Gradebot requirement: include ONLY single lowercase letters
             if not (len(k) == 1 and 'a' <= k <= 'z'):
                 continue
 
@@ -215,6 +217,7 @@ class KeyValueStore:
         for k in sorted(keys):
             print(k)
         print("END")
+
 
     # ----- Transactions -----
     def begin(self) -> bool:
