@@ -182,42 +182,6 @@ class KeyValueStore:
             return 1
         return 0
         
-    # ---------- RANGE (Gradebot version) ----------
-    def range_cmd(self, start: str, end: str) -> None:
-        # Convert literal "" to empty string
-        if start == '""':
-            start = ""
-        if end == '""':
-            end = ""
-
-        start = start or ""
-        end = end or ""
-
-        keys: List[str] = []
-        seen = set()
-
-        for k, _ in self.index:
-            if k in seen:
-                continue
-            seen.add(k)
-
-            # Gradebot requirement: include ONLY single lowercase letters
-            if not (len(k) == 1 and 'a' <= k <= 'z'):
-                continue
-
-            if self._is_expired(k):
-                continue
-            if start and k < start:
-                continue
-            if end and k > end:
-                continue
-
-            keys.append(k)
-
-        for k in sorted(keys):
-            print(k)
-        print("END")
-
 
     # ----- Transactions -----
     def begin(self) -> bool:
