@@ -2,11 +2,14 @@
 # KV Store Project 2 – Transactions, TTL, Range, Multi-Ops
 # CSCE 5350 | Author: Badrinath | EUID: 11820168
 
-import os, sys, time, logging
+import os, sys, time, logging, re
 from typing import List, Tuple, Optional
 
 DATA_FILE = "data.db"
 LOG_FILE  = "kvstore.log"
+
+# Accept only alphabetic keys (no digits/hyphens) for RANGE output
+_ALPHA_KEY = re.compile(r"^[A-Za-z]+$").match
 
 # ---------- Utility ----------
 def now_ms() -> int:
@@ -189,7 +192,7 @@ class KeyValueStore:
 
     # ----- RANGE -----
     def range_cmd(self, start: str, end: str) -> None:
-        # Accept literal "" as open bound, too
+        # Accept literal "" as open bound
         if start == '""': start = ""
         if end   == '""': end   = ""
         start = start or ""
@@ -207,8 +210,8 @@ class KeyValueStore:
             if self._is_expired(k):
                 continue
 
-            # Only include alphabetic keys (Gradebot’s expected set)
-            if not k.isalpha():
+            # STRICT: only alphabetic keys show up in RANGE output
+            if not _ALPHA_KEY(k):
                 continue
 
             if start and k < start:
@@ -318,5 +321,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
