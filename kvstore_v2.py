@@ -99,7 +99,7 @@ class KeyValueStore:
         if self._is_expired(key):
             return None
         if self.in_txn:
-            # read-your-writes inside this session
+            # read-your-writes
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
                     if cmd == "SET": return args[1]
@@ -114,7 +114,6 @@ class KeyValueStore:
         if self._is_expired(key):
             return 0
         if self.in_txn:
-            # Only buffer a DEL if it would actually delete something visible
             if self.exists(key) == 0:
                 return 0
             self.txn_buffer.append(("DEL", [key]))
@@ -146,7 +145,7 @@ class KeyValueStore:
     def mget(self, keys: List[str]) -> None:
         for k in keys:
             v = self.get(k)
-            print("nil" if v is None else v)
+            print("nil" if v is None else v, flush=True)
 
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
@@ -190,7 +189,7 @@ class KeyValueStore:
 
     # ----- RANGE -----
     def range_cmd(self, start: str, end: str) -> None:
-        # Defensive: accept literal "" as open bound if it somehow arrives here
+        # Defensive: accept literal "" as open bound if it arrives here
         if start == '""': start = ""
         if end   == '""': end   = ""
         start = start or ""
@@ -211,8 +210,8 @@ class KeyValueStore:
             keys.append(k)
 
         for k in sorted(keys):
-            print(k)
-        print("END")
+            print(k, flush=True)
+        print("END", flush=True)
 
     # ----- Transactions -----
     def begin(self) -> bool:
@@ -245,7 +244,8 @@ def _parse(line: str) -> tuple[str, list[str]]:
 
 def run_repl() -> None:
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        # ensure UTF-8 and line buffering for immediate flush behavior
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
@@ -258,44 +258,40 @@ def run_repl() -> None:
             continue
         cmd, args = _parse(line)
         try:
-            if cmd == "":
+            if cmd == "": 
                 continue
             if cmd == "EXIT":
                 break
 
             if cmd == "SET" and len(args) == 2:
-                store.set(args[0], args[1]); print("OK"); continue
+                store.set(args[0], args[1]); print("OK", flush=True); continue
             if cmd == "GET" and len(args) == 1:
-                v = store.get(args[0]); print("nil" if v is None else v); continue
+                v = store.get(args[0]); print("nil" if v is None else v, flush=True); continue
             if cmd == "DEL" and len(args) == 1:
-                print(store.delete(args[0])); continue
+                print(store.delete(args[0]), flush=True); continue
             if cmd == "EXISTS" and len(args) == 1:
-                print(store.exists(args[0])); continue
+                print(store.exists(args[0]), flush=True); continue
             if cmd == "MSET" and len(args) >= 2 and len(args) % 2 == 0:
-                store.mset(args); print("OK"); continue
+                store.mset(args); print("OK", flush=True); continue
             if cmd == "MGET" and len(args) >= 1:
                 store.mget(args); continue
             if cmd == "EXPIRE" and len(args) == 2:
-                print(store.expire(args[0], int(args[1]))); continue
+                print(store.expire(args[0], int(args[1])), flush=True); continue
             if cmd == "TTL" and len(args) == 1:
-                print(store.ttl_cmd(args[0])); continue
+                print(store.ttl_cmd(args[0]), flush=True); continue
             if cmd == "PERSIST" and len(args) == 1:
-                print(store.persist(args[0])); continue
-
+                print(store.persist(args[0]), flush=True); continue
             if cmd == "RANGE":
                 s, e = (args + ["", ""])[:2]
-                # Treat literal "" as open bound at the CLI layer
                 if s == '""': s = ""
                 if e == '""': e = ""
-                store.range_cmd(s, e)
-                continue
-
+                store.range_cmd(s, e); continue
             if cmd == "BEGIN":
-                print("OK" if store.begin() else "ERR transaction already started"); continue
+                print("OK" if store.begin() else "ERR transaction already started", flush=True); continue
             if cmd == "COMMIT":
-                print("OK" if store.commit() else "ERR no transaction"); continue
+                print("OK" if store.commit() else "ERR no transaction", flush=True); continue
             if cmd == "ABORT":
-                store.abort(); print("OK"); continue
+                store.abort(); print("OK", flush=True); continue
 
             # ---- Local debug only (ignored by Gradebot) ----
             if cmd == "DEBUG_TTL" and len(args) == 1:
@@ -303,9 +299,9 @@ def run_repl() -> None:
                 exp = store.ttl.get(k)
                 now = now_ms()
                 rem = (exp - now) if exp is not None else None
-                print(f"exp={exp} now={now} remaining={rem}"); continue
+                print(f"exp={exp} now={now} remaining={rem}", flush=True); continue
             if cmd == "DEBUG_NOW":
-                print(f"now={now_ms()}"); continue
+                print(f"now={now_ms()}", flush=True); continue
             if cmd == "SLEEP" and len(args) == 1:
                 try:
                     ms = int(args[0]); time.sleep(max(ms, 0)/1000.0)
@@ -314,9 +310,9 @@ def run_repl() -> None:
                 continue
             # ------------------------------------------------
 
-            print("ERR unknown or invalid command")
+            print("ERR unknown or invalid command", flush=True)
         except Exception as e:
-            print(f"ERR {e}")
+            print(f"ERR {e}", flush=True)
 
 def main() -> None:
     setup_logging()
@@ -324,4 +320,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
