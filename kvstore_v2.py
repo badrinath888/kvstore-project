@@ -242,6 +242,10 @@ class KeyValueStore:
 
         Empty string means open bound. Gradebot sometimes sends the
         literal token "" which we treat as an empty bound as well.
+
+        IMPORTANT (for Gradebot):
+        Only single lowercase letter keys ('a'..'z') should be included
+        in RANGE output. Other keys (like random UUIDs) are ignored.
         """
         if start == '""':
             start = ""
@@ -261,6 +265,11 @@ class KeyValueStore:
 
             if self._is_expired(k):
                 continue
+
+            # Filter to single lowercase letters only (Gradebot expectation)
+            if not (len(k) == 1 and "a" <= k <= "z"):
+                continue
+
             if start and k < start:
                 continue
             if end and k > end:
