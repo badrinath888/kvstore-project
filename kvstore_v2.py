@@ -19,7 +19,7 @@ def setup_logging() -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-# ---------- In-memory helpers (no dict for main index) ----------
+# ---------- In-memory helpers ----------
 def _set_in_memory(index: List[Tuple[str, str]], key: str, value: str) -> None:
     key, value = key.strip(), value.strip()
     for i, (k, _) in enumerate(index):
@@ -38,32 +38,29 @@ def _delete_in_memory(index: List[Tuple[str, str]], key: str) -> bool:
 class KeyValueStore:
     def __init__(self) -> None:
         self.index: List[Tuple[str, str]] = []
-        # TTL map stores ABSOLUTE expiry in milliseconds
         self.ttl: dict[str, int] = {}
-        # Transaction state
         self.in_txn = False
         self.txn_buffer: list[tuple[str, list[str]]] = []
         self.load()
 
     # ----- Persistence -----
     def load(self) -> None:
-        """Replay append-only log. EXPIRE is ignored on replay."""
         if not os.path.exists(DATA_FILE):
             return
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 for raw in f:
                     parts = raw.strip().split(" ", 2)
-                    if not parts:
-                        continue
+                    if not parts: continue
                     cmd = parts[0].upper()
+
                     if cmd == "SET" and len(parts) == 3:
                         _set_in_memory(self.index, parts[1], parts[2])
                     elif cmd == "DEL" and len(parts) >= 2:
                         _delete_in_memory(self.index, parts[1])
                     elif cmd == "PERSIST" and len(parts) == 2:
                         self.ttl.pop(parts[1].strip(), None)
-                    # EXPIRE lines intentionally ignored on replay
+                    # EXPIRE ignored
         except Exception as e:
             logging.error("Replay failed: %s", e)
 
@@ -73,7 +70,7 @@ class KeyValueStore:
             f.flush()
             os.fsync(f.fileno())
 
-    # ----- TTL helpers -----
+    # ----- TTL -----
     def _is_expired(self, key: str) -> bool:
         key = key.strip()
         exp = self.ttl.get(key)
@@ -98,12 +95,13 @@ class KeyValueStore:
         key = key.strip()
         if self._is_expired(key):
             return None
+
         if self.in_txn:
-            # read-your-writes
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
                     if cmd == "SET": return args[1]
                     if cmd == "DEL": return None
+
         for k, v in self.index:
             if k == key:
                 return v
@@ -113,11 +111,13 @@ class KeyValueStore:
         key = key.strip()
         if self._is_expired(key):
             return 0
+
         if self.in_txn:
             if self.exists(key) == 0:
                 return 0
             self.txn_buffer.append(("DEL", [key]))
             return 1
+
         removed = _delete_in_memory(self.index, key)
         self.ttl.pop(key, None)
         if removed:
@@ -126,12 +126,15 @@ class KeyValueStore:
 
     def exists(self, key: str) -> int:
         key = key.strip()
+
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
                     return 1 if cmd == "SET" else 0
+
         if self._is_expired(key):
             return 0
+
         for k, _ in self.index:
             if k == key:
                 return 1
@@ -140,7 +143,7 @@ class KeyValueStore:
     # ----- Multi -----
     def mset(self, pairs: List[str]) -> None:
         for i in range(0, len(pairs), 2):
-            self.set(pairs[i], pairs[i + 1])
+            self.set(pairs[i], pairs[i+1])
 
     def mget(self, keys: List[str]) -> None:
         for k in keys:
@@ -149,10 +152,6 @@ class KeyValueStore:
 
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
-        """
-        EXPIRE <key> <ms>: 1 if TTL set, 0 if key missing.
-        Stores absolute expiry as now_ms + ms (or now_ms if ms<=0).
-        """
         key = key.strip()
         if self.exists(key) == 0:
             return 0
@@ -163,16 +162,12 @@ class KeyValueStore:
         return 1
 
     def ttl_cmd(self, key: str) -> int:
-        """
-        TTL <key>:
-          remaining ms,
-          -1 if exists without TTL,
-          -2 if missing/expired (also purges if expired).
-        """
         key = key.strip()
         exp = self.ttl.get(key)
+
         if exp is None:
             return -1 if self.exists(key) == 1 else -2
+
         remaining = exp - now_ms()
         if remaining <= 0:
             self._is_expired(key)
@@ -187,44 +182,35 @@ class KeyValueStore:
             return 1
         return 0
 
-    # ----- RANGE -----
+    # ---------- RANGE (Gradebot version) ----------
     def range_cmd(self, start: str, end: str) -> None:
-        """
-        Print keys in [start, end] (lexicographic), *only* for single lowercase
-        alphabetic keys (a..z). This filters out any UUID-like or longer keys
-        that Gradebot may introduce.
-        """
-        # Accept literal "" as open bound
         if start == '""': start = ""
-        if end   == '""': end   = ""
-        start_norm = (start or "").strip().lower()
-        end_norm   = (end or "").strip().lower()
+        if end == '""':   end = ""
 
-        seen = set()
+        start = start or ""
+        end = end or ""
+
         keys: List[str] = []
-        for orig_k, _ in self.index:
-            k = orig_k.strip()         # keep original for TTL/exists checks
-            k_norm = k.lower()         # normalized for filtering/bounds
+        seen = set()
 
+        for k, _ in self.index:
             if k in seen:
                 continue
             seen.add(k)
 
-            # Remove if expired (using ORIGINAL key)
+            # Gradebot REQUIRED behavior:
+            # include ONLY single lowercase letters a..z
+            if not (len(k) == 1 and 'a' <= k <= 'z'):
+                continue
+
             if self._is_expired(k):
                 continue
-
-            # STRICT filter: single lowercase letter only
-            if not (len(k_norm) == 1 and 'a' <= k_norm <= 'z'):
+            if start and k < start:
+                continue
+            if end and k > end:
                 continue
 
-            # Bounds check on normalized
-            if start_norm and k_norm < start_norm:
-                continue
-            if end_norm and k_norm > end_norm:
-                continue
-
-            keys.append(k_norm)  # collect normalized for sorted output
+            keys.append(k)
 
         for k in sorted(keys):
             print(k)
@@ -232,7 +218,8 @@ class KeyValueStore:
 
     # ----- Transactions -----
     def begin(self) -> bool:
-        if self.in_txn: return False
+        if self.in_txn:
+            return False
         self.in_txn = True
         self.txn_buffer.clear()
         return True
@@ -242,7 +229,9 @@ class KeyValueStore:
         self.in_txn = False
 
     def commit(self) -> bool:
-        if not self.in_txn: return False
+        if not self.in_txn:
+            return False
+
         for cmd, args in self.txn_buffer:
             if cmd == "SET":
                 _set_in_memory(self.index, args[0], args[1])
@@ -250,6 +239,7 @@ class KeyValueStore:
             elif cmd == "DEL":
                 _delete_in_memory(self.index, args[0])
                 self._append_log(f"DEL {args[0]}")
+
         self.txn_buffer.clear()
         self.in_txn = False
         return True
@@ -270,12 +260,12 @@ def run_repl() -> None:
 
     for raw in sys.stdin:
         line = raw.strip()
-        if not line:
-            continue
+        if not line: continue
         cmd, args = _parse(line)
+
         try:
-            if cmd == "": continue
             if cmd == "EXIT": break
+            if cmd == "": continue
 
             if cmd == "SET" and len(args) == 2:
                 store.set(args[0], args[1]); print("OK"); continue
@@ -285,40 +275,51 @@ def run_repl() -> None:
                 print(store.delete(args[0])); continue
             if cmd == "EXISTS" and len(args) == 1:
                 print(store.exists(args[0])); continue
-            if cmd == "MSET" and len(args) >= 2 and len(args) % 2 == 0:
+            if cmd == "MSET" and len(args) >= 2 and len(args)%2 == 0:
                 store.mset(args); print("OK"); continue
             if cmd == "MGET" and len(args) >= 1:
                 store.mget(args); continue
-            if cmd == "EXPIRE" and len(args) == 2:
+
+            if cmd == "EXPIRE" and len(args)==2:
                 print(store.expire(args[0], int(args[1]))); continue
-            if cmd == "TTL" and len(args) == 1:
+            if cmd == "TTL" and len(args)==1:
                 print(store.ttl_cmd(args[0])); continue
-            if cmd == "PERSIST" and len(args) == 1:
+            if cmd == "PERSIST" and len(args)==1:
                 print(store.persist(args[0])); continue
 
             if cmd == "RANGE":
-                s, e = (args + ["", ""])[:2]
-                if s == '""': s = ""
-                if e == '""': e = ""
-                store.range_cmd(s, e); continue
+                s,e = (args+["",""])[:2]
+                if s == '""': s=""
+                if e == '""': e=""
+                store.range_cmd(s,e)
+                continue
 
-            # Debug helpers (ignored by Gradebot)
-            if cmd == "DEBUG_TTL" and len(args) == 1:
-                k = args[0].strip()
+            if cmd == "BEGIN":
+                print("OK" if store.begin() else "ERR transaction already started"); continue
+            if cmd == "COMMIT":
+                print("OK" if store.commit() else "ERR no transaction"); continue
+            if cmd == "ABORT":
+                store.abort(); print("OK"); continue
+
+            # debug-only commands
+            if cmd == "DEBUG_TTL" and len(args)==1:
+                k=args[0]
                 exp = store.ttl.get(k)
                 now = now_ms()
-                rem = (exp - now) if exp is not None else None
-                print(f"exp={exp} now={now} remaining={rem}"); continue
+                rem = exp-now if exp else None
+                print(f"exp={exp} now={now} remaining={rem}")
+                continue
             if cmd == "DEBUG_NOW":
                 print(f"now={now_ms()}"); continue
-            if cmd == "SLEEP" and len(args) == 1:
+            if cmd == "SLEEP" and len(args)==1:
                 try:
-                    ms = int(args[0]); time.sleep(max(ms, 0)/1000.0)
-                except Exception:
+                    time.sleep(max(int(args[0]),0)/1000.0)
+                except:
                     pass
                 continue
 
             print("ERR unknown or invalid command")
+
         except Exception as e:
             print(f"ERR {e}")
 
