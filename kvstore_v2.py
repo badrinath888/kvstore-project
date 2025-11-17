@@ -150,6 +150,43 @@ class KeyValueStore:
             v = self.get(k)
             print("nil" if v is None else v)
 
+        # ---------- RANGE (Gradebot version) ----------
+    def range_cmd(self, start: str, end: str) -> None:
+        # Convert literal "" to empty string
+        if start == '""':
+            start = ""
+        if end == '""':
+            end = ""
+
+        start = start or ""
+        end = end or ""
+
+        keys: List[str] = []
+        seen = set()
+
+        for k, _ in self.index:
+            if k in seen:
+                continue
+            seen.add(k)
+
+            # Gradebot requirement: ONLY single lowercase letters a..z
+            if not (len(k) == 1 and 'a' <= k <= 'z'):
+                continue
+
+            if self._is_expired(k):
+                continue
+            if start and k < start:
+                continue
+            if end and k > end:
+                continue
+
+            keys.append(k)
+
+        for k in sorted(keys):
+            print(k)
+        print("END")
+
+
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
         key = key.strip()
