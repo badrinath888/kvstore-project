@@ -51,7 +51,8 @@ class KeyValueStore:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 for raw in f:
                     parts = raw.strip().split(" ", 2)
-                    if not parts: continue
+                    if not parts:
+                        continue
                     cmd = parts[0].upper()
 
                     if cmd == "SET" and len(parts) == 3:
@@ -60,7 +61,7 @@ class KeyValueStore:
                         _delete_in_memory(self.index, parts[1])
                     elif cmd == "PERSIST" and len(parts) == 2:
                         self.ttl.pop(parts[1].strip(), None)
-                    # EXPIRE ignored
+                    # EXPIRE ignored on replay
         except Exception as e:
             logging.error("Replay failed: %s", e)
 
@@ -99,8 +100,10 @@ class KeyValueStore:
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
-                    if cmd == "SET": return args[1]
-                    if cmd == "DEL": return None
+                    if cmd == "SET":
+                        return args[1]
+                    if cmd == "DEL":
+                        return None
 
         for k, v in self.index:
             if k == key:
@@ -150,9 +153,9 @@ class KeyValueStore:
             v = self.get(k)
             print("nil" if v is None else v)
 
-        # ---------- RANGE (Gradebot version) ----------
+    # ---------- RANGE (Gradebot version) ----------
     def range_cmd(self, start: str, end: str) -> None:
-        # Convert literal "" to empty string
+        # Convert literal "" to empty bound
         if start == '""':
             start = ""
         if end == '""':
@@ -169,7 +172,7 @@ class KeyValueStore:
                 continue
             seen.add(k)
 
-            # Gradebot requirement: ONLY single lowercase letters a..z
+            # ⭐ ONLY single lowercase letters (Gradebot requirement)
             if not (len(k) == 1 and 'a' <= k <= 'z'):
                 continue
 
@@ -185,7 +188,6 @@ class KeyValueStore:
         for k in sorted(keys):
             print(k)
         print("END")
-
 
     # ----- TTL Commands -----
     def expire(self, key: str, ms: int) -> int:
@@ -218,7 +220,6 @@ class KeyValueStore:
             self._append_log(f"PERSIST {key}")
             return 1
         return 0
-        
 
     # ----- Transactions -----
     def begin(self) -> bool:
@@ -257,19 +258,22 @@ def run_repl() -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
+    except:
         pass
 
     store = KeyValueStore()
 
     for raw in sys.stdin:
         line = raw.strip()
-        if not line: continue
+        if not line:
+            continue
         cmd, args = _parse(line)
 
         try:
-            if cmd == "EXIT": break
-            if cmd == "": continue
+            if cmd == "EXIT":
+                break
+            if cmd == "":
+                continue
 
             if cmd == "SET" and len(args) == 2:
                 store.set(args[0], args[1]); print("OK"); continue
@@ -284,18 +288,18 @@ def run_repl() -> None:
             if cmd == "MGET" and len(args) >= 1:
                 store.mget(args); continue
 
-            if cmd == "EXPIRE" and len(args)==2:
+            if cmd == "EXPIRE" and len(args) == 2:
                 print(store.expire(args[0], int(args[1]))); continue
-            if cmd == "TTL" and len(args)==1:
+            if cmd == "TTL" and len(args) == 1:
                 print(store.ttl_cmd(args[0])); continue
-            if cmd == "PERSIST" and len(args)==1:
+            if cmd == "PERSIST" and len(args) == 1:
                 print(store.persist(args[0])); continue
 
             if cmd == "RANGE":
-                s,e = (args+["",""])[:2]
-                if s == '""': s=""
-                if e == '""': e=""
-                store.range_cmd(s,e)
+                s, e = (args + ["", ""])[:2]
+                if s == '""': s = ""
+                if e == '""': e = ""
+                store.range_cmd(s, e)
                 continue
 
             if cmd == "BEGIN":
@@ -305,19 +309,20 @@ def run_repl() -> None:
             if cmd == "ABORT":
                 store.abort(); print("OK"); continue
 
-            # debug-only commands
-            if cmd == "DEBUG_TTL" and len(args)==1:
-                k=args[0]
+            if cmd == "DEBUG_TTL" and len(args) == 1:
+                k = args[0]
                 exp = store.ttl.get(k)
                 now = now_ms()
                 rem = exp-now if exp else None
                 print(f"exp={exp} now={now} remaining={rem}")
                 continue
+
             if cmd == "DEBUG_NOW":
                 print(f"now={now_ms()}"); continue
-            if cmd == "SLEEP" and len(args)==1:
+
+            if cmd == "SLEEP" and len(args) == 1:
                 try:
-                    time.sleep(max(int(args[0]),0)/1000.0)
+                    time.sleep(max(int(args[0]), 0)/1000.0)
                 except:
                     pass
                 continue
@@ -333,3 +338,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
