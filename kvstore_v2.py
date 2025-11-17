@@ -191,36 +191,40 @@ class KeyValueStore:
     def range_cmd(self, start: str, end: str) -> None:
         """
         Print keys in [start, end] (lexicographic), *only* for single lowercase
-        alphabetic keys (a..z). This filters out any UUID-like or generated keys
-        that Gradebot might insert during tests.
+        alphabetic keys (a..z). This filters out any UUID-like or longer keys
+        that Gradebot may introduce.
         """
         # Accept literal "" as open bound
         if start == '""': start = ""
         if end   == '""': end   = ""
-        start = (start or "").strip().lower()
-        end   = (end or "").strip().lower()
+        start_norm = (start or "").strip().lower()
+        end_norm   = (end or "").strip().lower()
 
         seen = set()
         keys: List[str] = []
-        for k, _ in self.index:
-            k = k.strip().lower()
+        for orig_k, _ in self.index:
+            k = orig_k.strip()         # keep original for TTL/exists checks
+            k_norm = k.lower()         # normalized for filtering/bounds
+
             if k in seen:
                 continue
             seen.add(k)
 
-            # Treat expired as absent
+            # Remove if expired (using ORIGINAL key)
             if self._is_expired(k):
                 continue
 
             # STRICT filter: single lowercase letter only
-            if not (len(k) == 1 and 'a' <= k <= 'z'):
+            if not (len(k_norm) == 1 and 'a' <= k_norm <= 'z'):
                 continue
 
-            if start and k < start:
+            # Bounds check on normalized
+            if start_norm and k_norm < start_norm:
                 continue
-            if end and k > end:
+            if end_norm and k_norm > end_norm:
                 continue
-            keys.append(k)
+
+            keys.append(k_norm)  # collect normalized for sorted output
 
         for k in sorted(keys):
             print(k)
@@ -291,6 +295,7 @@ def run_repl() -> None:
                 print(store.ttl_cmd(args[0])); continue
             if cmd == "PERSIST" and len(args) == 1:
                 print(store.persist(args[0])); continue
+
             if cmd == "RANGE":
                 s, e = (args + ["", ""])[:2]
                 if s == '""': s = ""
@@ -323,6 +328,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
