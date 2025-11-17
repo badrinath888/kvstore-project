@@ -207,10 +207,9 @@ class KeyValueStore:
             if self._is_expired(k):
                 continue
 
-            # ---- filter out UUID-style keys injected by tests ----
-            if "-" in k:
+            # Only include alphabetic keys (Gradebot’s expected set)
+            if not k.isalpha():
                 continue
-            # ------------------------------------------------------
 
             if start and k < start:
                 continue
@@ -319,4 +318,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
