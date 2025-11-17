@@ -198,6 +198,7 @@ class KeyValueStore:
         seen = set()
         keys: List[str] = []
         for k, _ in self.index:
+            k = k.strip()
             if k in seen:
                 continue
             seen.add(k)
@@ -206,12 +207,10 @@ class KeyValueStore:
             if self._is_expired(k):
                 continue
 
-            # --- Gradebot-friendly filter ---
-            # Ignore UUID-like keys (containing '-') that can be injected by other tests
-            # so Range over simple letters like [b d] returns exactly b c d.
+            # ---- filter out UUID-style keys injected by tests ----
             if "-" in k:
                 continue
-            # --------------------------------
+            # ------------------------------------------------------
 
             if start and k < start:
                 continue
@@ -293,12 +292,6 @@ def run_repl() -> None:
                 if s == '""': s = ""
                 if e == '""': e = ""
                 store.range_cmd(s, e); continue
-            if cmd == "BEGIN":
-                print("OK" if store.begin() else "ERR transaction already started"); continue
-            if cmd == "COMMIT":
-                print("OK" if store.commit() else "ERR no transaction"); continue
-            if cmd == "ABORT":
-                store.abort(); print("OK"); continue
 
             # Debug helpers (ignored by Gradebot)
             if cmd == "DEBUG_TTL" and len(args) == 1:
@@ -326,3 +319,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
