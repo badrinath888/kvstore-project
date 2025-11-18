@@ -271,7 +271,9 @@ class KeyValueStore:
         keys: List[str] = []
         seen = set()
 
-        for k, _ in self.index:
+        # iterate over a snapshot so _is_expired (which mutates self.index)
+        # does not interfere with iteration
+        for k, _ in list(self.index):
             if k in seen:
                 continue
             seen.add(k)
