@@ -236,11 +236,10 @@ class KeyValueStore:
         key = key.strip()
         exp = self.ttl.get(key)
 
-        # No TTL entry: rely on exists() to decide if key is present.
         if exp is None:
             return -1 if self.exists(key) == 1 else -2
 
-        # TTL entry exists, but key itself might be gone.
+        # TTL entry exists, but key might already be gone
         if self.exists(key) == 0:
             return -2
 
@@ -358,7 +357,7 @@ CommandHandler = Callable[[KeyValueStore, str], bool]
 
 
 def _cmd_set(store: KeyValueStore, arg_str: str) -> bool:
-    # Allow empty value and values with spaces.
+    # Allow empty value and values with spaces; treat "" as empty string.
     if not arg_str:
         print("ERR unknown or invalid command")
         return True
@@ -367,7 +366,12 @@ def _cmd_set(store: KeyValueStore, arg_str: str) -> bool:
     if not key:
         print("ERR unknown or invalid command")
         return True
-    value = parts[1] if len(parts) == 2 else ""
+    if len(parts) == 1:
+        # No value provided at all
+        print("ERR unknown or invalid command")
+        return True
+    raw_value = parts[1]
+    value = "" if raw_value == '""' else raw_value
     store.set(key, value)
     print("OK")
     return True
@@ -406,6 +410,10 @@ def _cmd_mset(store: KeyValueStore, arg_str: str) -> bool:
     if len(args) < 2 or len(args) % 2 != 0:
         print("ERR unknown or invalid command")
         return True
+    # Normalize "" as empty string for values (odd indices)
+    for i in range(1, len(args), 2):
+        if args[i] == '""':
+            args[i] = ""
     store.mset(args)
     print("OK")
     return True
