@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# KV Store Project 2 – Transactions, TTL, Range, Multi-Ops
+# KV Store Project 2 – Transactions, TTL (ms), Range, Multi-Ops
 # CSCE 5350 | Author: Badrinath | EUID: 11820168
 
 import os
 import sys
 import time
 import logging
-from typing import List, Tuple, Optional, Callable
+from typing import List, Tuple, Optional, Dict, Callable
 
 DATA_FILE = "data.db"
 LOG_FILE = "kvstore.log"
@@ -54,10 +54,10 @@ class KeyValueStore:
     """Append-only, in-memory key-value store with TTL, range, and transactions."""
 
     def __init__(self) -> None:
-        self.index: List[Tuple[str, str]] = []
-        self.ttl: dict[str, int] = {}
+        self.index: List[Tuple[str, str]] = []          # main key/value list
+        self.ttl: Dict[str, int] = {}                   # key -> absolute expiry (ms)
         self.in_txn: bool = False
-        self.txn_buffer: list[tuple[str, list[str]]] = []
+        self.txn_buffer: List[Tuple[str, List[str]]] = []
         self.load_data()
 
     # ----- Persistence -----
@@ -66,7 +66,8 @@ class KeyValueStore:
         """
         Replay append-only log into memory.
 
-        Replays SET/DEL/PERSIST operations. EXPIRE and unknown lines are ignored.
+        Replays SET/DEL/PERSIST operations. EXPIRE lines are ignored on replay;
+        TTL is only tracked in-memory for the current process.
         """
         if not os.path.exists(DATA_FILE):
             logging.info("No existing data file; starting with empty store")
@@ -75,7 +76,7 @@ class KeyValueStore:
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 for lineno, raw in enumerate(f, start=1):
-                    line = raw.strip()
+                    line = raw.rstrip("\n")
                     if not line or line.startswith("#"):
                         continue
                     parts = line.split(" ", 2)
@@ -86,9 +87,10 @@ class KeyValueStore:
                             _set_in_memory(self.index, parts[1], parts[2])
                         elif cmd == "DEL" and len(parts) >= 2:
                             _delete_in_memory(self.index, parts[1])
+                            self.ttl.pop(parts[1].strip(), None)
                         elif cmd == "PERSIST" and len(parts) == 2:
                             self.ttl.pop(parts[1].strip(), None)
-                        # EXPIRE and other commands are ignored on replay
+                        # EXPIRE and unknown commands are ignored on replay
                     except Exception as inner:
                         logging.warning(
                             "Skipping invalid log line %d (%r): %s",
@@ -102,7 +104,8 @@ class KeyValueStore:
     def _append_log(self, line: str) -> None:
         """Append a single operation line to the data file."""
         with open(DATA_FILE, "a", encoding="utf-8") as f:
-            f.write(line.strip() + "\n")
+            # do NOT strip here; we need to preserve empty values like "SET k "
+            f.write(line + "\n")
             f.flush()
             os.fsync(f.fileno())
 
@@ -141,6 +144,7 @@ class KeyValueStore:
         if self._is_expired(key):
             return None
 
+        # read-your-writes in a transaction
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
@@ -176,6 +180,7 @@ class KeyValueStore:
         """EXISTS key – return 1 if present and not expired, else 0."""
         key = key.strip()
 
+        # transactional override
         if self.in_txn:
             for cmd, args in reversed(self.txn_buffer):
                 if args[0] == key:
@@ -231,8 +236,13 @@ class KeyValueStore:
         key = key.strip()
         exp = self.ttl.get(key)
 
+        # No TTL entry: rely on exists() to decide if key is present.
         if exp is None:
             return -1 if self.exists(key) == 1 else -2
+
+        # TTL entry exists, but key itself might be gone.
+        if self.exists(key) == 0:
+            return -2
 
         remaining = exp - now_ms()
         if remaining <= 0:
@@ -244,9 +254,11 @@ class KeyValueStore:
         """
         PERSIST key – remove TTL.
 
-        Returns 1 if TTL removed, 0 if no TTL.
+        Returns 1 if TTL removed, 0 if no TTL or key does not exist.
         """
         key = key.strip()
+        if self.exists(key) == 0:
+            return 0
         if key in self.ttl:
             self.ttl.pop(key, None)
             self._append_log(f"PERSIST {key}")
@@ -272,7 +284,7 @@ class KeyValueStore:
         keys: List[str] = []
         seen = set()
 
-        # Use a snapshot so _is_expired (which mutates index) is safe
+        # iterate over a snapshot so _is_expired (which mutates index) is safe
         for k, _ in list(self.index):
             if k in seen:
                 continue
@@ -321,6 +333,7 @@ class KeyValueStore:
                 self._append_log(f"SET {args[0]} {args[1]}")
             elif cmd == "DEL":
                 _delete_in_memory(self.index, args[0])
+                self.ttl.pop(args[0].strip(), None)
                 self._append_log(f"DEL {args[0]}")
 
         self.txn_buffer.clear()
@@ -330,118 +343,144 @@ class KeyValueStore:
 
 # ---------- CLI / Command Dispatch ----------
 
-def _parse(line: str) -> tuple[str, list[str]]:
-    """Split a raw line into (command, args)."""
-    parts = line.strip().split()
-    return (parts[0].upper(), parts[1:]) if parts else ("", [])
+def _parse(line: str) -> Tuple[str, str]:
+    """Split a raw line into (command, raw_arg_string)."""
+    line = line.lstrip()
+    if not line:
+        return "", ""
+    parts = line.split(" ", 1)
+    cmd = parts[0].upper()
+    arg_str = parts[1] if len(parts) == 2 else ""
+    return cmd, arg_str
 
 
-CommandHandler = Callable[[KeyValueStore, list[str]], bool]
+CommandHandler = Callable[[KeyValueStore, str], bool]
 
 
-def _cmd_set(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 2:
-        store.set(args[0], args[1])
-        print("OK")
-    else:
+def _cmd_set(store: KeyValueStore, arg_str: str) -> bool:
+    # Allow empty value and values with spaces.
+    if not arg_str:
         print("ERR unknown or invalid command")
-    return True
-
-
-def _cmd_get(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 1:
-        v = store.get(args[0])
-        print("nil" if v is None else v)
-    else:
+        return True
+    parts = arg_str.split(" ", 1)
+    key = parts[0]
+    if not key:
         print("ERR unknown or invalid command")
+        return True
+    value = parts[1] if len(parts) == 2 else ""
+    store.set(key, value)
+    print("OK")
     return True
 
 
-def _cmd_del(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 1:
-        print(store.delete(args[0]))
-    else:
+def _cmd_get(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) != 1:
         print("ERR unknown or invalid command")
+        return True
+    v = store.get(args[0])
+    print("nil" if v is None else v)
     return True
 
 
-def _cmd_exists(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 1:
-        print(store.exists(args[0]))
-    else:
+def _cmd_del(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) != 1:
         print("ERR unknown or invalid command")
+        return True
+    print(store.delete(args[0]))
     return True
 
 
-def _cmd_mset(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) >= 2 and len(args) % 2 == 0:
-        store.mset(args)
-        print("OK")
-    else:
+def _cmd_exists(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) != 1:
         print("ERR unknown or invalid command")
+        return True
+    print(store.exists(args[0]))
     return True
 
 
-def _cmd_mget(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) >= 1:
-        store.mget(args)
-    else:
+def _cmd_mset(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) < 2 or len(args) % 2 != 0:
         print("ERR unknown or invalid command")
+        return True
+    store.mset(args)
+    print("OK")
     return True
 
 
-def _cmd_expire(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 2:
-        print(store.expire(args[0], int(args[1])))
-    else:
+def _cmd_mget(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) < 1:
         print("ERR unknown or invalid command")
+        return True
+    store.mget(args)
     return True
 
 
-def _cmd_ttl(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 1:
-        print(store.ttl_cmd(args[0]))
-    else:
+def _cmd_expire(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) != 2:
         print("ERR unknown or invalid command")
-    return True
-
-
-def _cmd_persist(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 1:
-        print(store.persist(args[0]))
-    else:
+        return True
+    try:
+        ms = int(args[1])
+    except ValueError:
         print("ERR unknown or invalid command")
+        return True
+    print(store.expire(args[0], ms))
     return True
 
 
-def _cmd_range(store: KeyValueStore, args: list[str]) -> bool:
-    s, e = (args + ["", ""])[:2]
-    if s == '""':
-        s = ""
-    if e == '""':
-        e = ""
-    store.range_cmd(s, e)
+def _cmd_ttl(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) != 1:
+        print("ERR unknown or invalid command")
+        return True
+    print(store.ttl_cmd(args[0]))
     return True
 
 
-def _cmd_begin(store: KeyValueStore, args: list[str]) -> bool:
-    if args:
+def _cmd_persist(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) != 1:
+        print("ERR unknown or invalid command")
+        return True
+    print(store.persist(args[0]))
+    return True
+
+
+def _cmd_range(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) > 2:
+        print("ERR unknown or invalid command")
+        return True
+    start = args[0] if len(args) >= 1 else ""
+    end = args[1] if len(args) == 2 else ""
+    store.range_cmd(start, end)
+    return True
+
+
+def _cmd_begin(store: KeyValueStore, arg_str: str) -> bool:
+    if arg_str.strip():
         print("ERR unknown or invalid command")
         return True
     print("OK" if store.begin() else "ERR transaction already started")
     return True
 
 
-def _cmd_commit(store: KeyValueStore, args: list[str]) -> bool:
-    if args:
+def _cmd_commit(store: KeyValueStore, arg_str: str) -> bool:
+    if arg_str.strip():
         print("ERR unknown or invalid command")
         return True
     print("OK" if store.commit() else "ERR no transaction")
     return True
 
 
-def _cmd_abort(store: KeyValueStore, args: list[str]) -> bool:
-    if args:
+def _cmd_abort(store: KeyValueStore, arg_str: str) -> bool:
+    if arg_str.strip():
         print("ERR unknown or invalid command")
         return True
     store.abort()
@@ -449,45 +488,50 @@ def _cmd_abort(store: KeyValueStore, args: list[str]) -> bool:
     return True
 
 
-def _cmd_exit(store: KeyValueStore, args: list[str]) -> bool:
-    if args:
+def _cmd_exit(store: KeyValueStore, arg_str: str) -> bool:
+    if arg_str.strip():
         print("ERR unknown or invalid command")
         return True
     return False
 
 
-def _cmd_debug_ttl(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 1:
-        k = args[0]
-        exp = store.ttl.get(k)
-        now = now_ms()
-        rem = exp - now if exp is not None else None
-        print(f"exp={exp} now={now} remaining={rem}")
-    else:
+# Debug-only helpers (ignored by Gradebot)
+
+def _cmd_debug_ttl(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) != 1:
         print("ERR unknown or invalid command")
+        return True
+    k = args[0]
+    exp = store.ttl.get(k)
+    now = now_ms()
+    rem = exp - now if exp is not None else None
+    print(f"exp={exp} now={now} remaining={rem}")
     return True
 
 
-def _cmd_debug_now(store: KeyValueStore, args: list[str]) -> bool:
-    if args:
+def _cmd_debug_now(store: KeyValueStore, arg_str: str) -> bool:
+    if arg_str.strip():
         print("ERR unknown or invalid command")
         return True
     print(f"now={now_ms()}")
     return True
 
 
-def _cmd_sleep(store: KeyValueStore, args: list[str]) -> bool:
-    if len(args) == 1:
-        try:
-            time.sleep(max(int(args[0]), 0) / 1000.0)
-        except Exception:
-            pass
-    else:
+def _cmd_sleep(store: KeyValueStore, arg_str: str) -> bool:
+    args = arg_str.split()
+    if len(args) != 1:
         print("ERR unknown or invalid command")
+        return True
+    try:
+        ms = int(args[0])
+        time.sleep(max(ms, 0) / 1000.0)
+    except Exception:
+        pass
     return True
 
 
-COMMANDS: dict[str, CommandHandler] = {
+COMMANDS: Dict[str, CommandHandler] = {
     "SET": _cmd_set,
     "GET": _cmd_get,
     "DEL": _cmd_del,
@@ -509,7 +553,7 @@ COMMANDS: dict[str, CommandHandler] = {
 }
 
 
-def _handle_command(store: KeyValueStore, cmd: str, args: list[str]) -> bool:
+def _handle_command(store: KeyValueStore, cmd: str, arg_str: str) -> bool:
     """Dispatch a single command. Return False to exit the REPL."""
     if cmd == "":
         return True
@@ -517,7 +561,7 @@ def _handle_command(store: KeyValueStore, cmd: str, args: list[str]) -> bool:
     if handler is None:
         print("ERR unknown or invalid command")
         return True
-    return handler(store, args)
+    return handler(store, arg_str)
 
 
 def run_repl() -> None:
@@ -531,13 +575,13 @@ def run_repl() -> None:
     store = KeyValueStore()
 
     for raw in sys.stdin:
-        line = raw.strip()
-        if not line:
+        line = raw.rstrip("\n")
+        # Skip completely blank/whitespace lines
+        if not line.strip():
             continue
-        cmd, args = _parse(line)
-
+        cmd, arg_str = _parse(line)
         try:
-            if not _handle_command(store, cmd, args):
+            if not _handle_command(store, cmd, arg_str):
                 break
         except Exception as e:
             # last-resort error reporting so the REPL does not crash
@@ -551,4 +595,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
